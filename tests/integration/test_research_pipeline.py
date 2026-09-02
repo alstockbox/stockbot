@@ -22,3 +22,22 @@ def test_end_to_end_research_pipeline_returns_ranked_models_and_hypotheses():
     assert np.isfinite(run.ensemble.metrics["cagr"])
     assert 0 <= run.latest_signal <= 1
     assert run.hypotheses
+
+
+def test_research_pipeline_routes_ensemble_through_hard_risk_gate():
+    n = 120
+    idx = pd.date_range("2024-01-01", periods=n, freq="B")
+    close = np.concatenate([
+        np.linspace(100.0, 140.0, 80),
+        np.array([30.0]),
+        np.full(n - 81, 30.0),
+    ])
+    frame = pd.DataFrame({
+        "open": close,
+        "high": close * 1.01,
+        "low": close * 0.99,
+        "close": close,
+        "volume": np.full(n, 2_000_000),
+    }, index=idx)
+    run = run_research(frame)
+    assert (run.ensemble.positions.iloc[82:] == 0.0).all()
