@@ -7,6 +7,7 @@ from enum import Enum
 
 class DataGrade(str, Enum):
     DEMO = "demo"
+    BOOTSTRAP = "bootstrap"
     RESEARCH_GRADE = "research_grade"
 
 
