@@ -16,6 +16,7 @@ from stockbot.ml.dataset import make_forward_return_dataset
 from stockbot.ml.walkforward import walk_forward_predictions
 from stockbot.portfolio.constructor import PortfolioConfig, target_from_signal
 from stockbot.regimes.detector import detect_regime
+from stockbot.risk.engine import RiskConfig, RiskEngine
 from stockbot.strategies.baselines import BASELINE_STRATEGIES
 
 
@@ -86,6 +87,15 @@ def run_research(
     features = build_technical_features(frame)
     benchmark_returns = benchmark.pct_change().fillna(0.0) if benchmark is not None else None
     backtest_cfg = BacktestConfig()
+    risk_engine = RiskEngine(
+        RiskConfig(
+            max_position_weight=1.0,
+            max_drawdown=0.10,
+            max_daily_loss=0.04,
+            max_data_age_seconds=300.0,
+            abnormal_volatility=0.80,
+        )
+    )
 
     strategy_signals: dict[str, pd.Series] = {}
     leaderboard: list[dict[str, float | str]] = []
@@ -95,7 +105,13 @@ def run_research(
     for strategy in BASELINE_STRATEGIES:
         signals = _signal_series(features, strategy).fillna(0.0)
         strategy_signals[strategy.name] = signals
-        bt = run_backtest(frame, signals, backtest_cfg, benchmark_returns)
+        bt = run_backtest(
+            frame,
+            signals,
+            backtest_cfg,
+            benchmark_returns,
+            risk_engine=risk_engine,
+        )
         robustness = max(0.0, min(1.0, 1.0 - bt.metrics["max_drawdown"]))
         score = research_score(bt.metrics, robustness)
         leaderboard.append({"name": strategy.name, "score": score, **bt.metrics})
@@ -105,7 +121,13 @@ def run_research(
     ml_signal, ml_oos_samples = _build_ml_oos_signal(features, frame["close"])
     if ml_oos_samples > 0:
         strategy_signals["ml_ridge"] = ml_signal
-        ml_bt = run_backtest(frame, ml_signal, backtest_cfg, benchmark_returns)
+        ml_bt = run_backtest(
+            frame,
+            ml_signal,
+            backtest_cfg,
+            benchmark_returns,
+            risk_engine=risk_engine,
+        )
         coverage = min(1.0, ml_oos_samples / max(1, len(frame) // 2))
         ml_robustness = max(0.0, min(1.0, (1.0 - ml_bt.metrics["max_drawdown"]) * coverage))
         ml_score = research_score(ml_bt.metrics, ml_robustness)
@@ -149,7 +171,13 @@ def run_research(
         raw_ensemble.append(target.weight)
 
     ensemble_signal = pd.Series(raw_ensemble, index=frame.index, dtype=float).fillna(0.0)
-    ensemble_bt = run_backtest(frame, ensemble_signal, backtest_cfg, benchmark_returns)
+    ensemble_bt = run_backtest(
+        frame,
+        ensemble_signal,
+        backtest_cfg,
+        benchmark_returns,
+        risk_engine=risk_engine,
+    )
     latest_regime = regime_series.iloc[-1]
     latest_signal = float(ensemble_signal.iloc[-1])
 
