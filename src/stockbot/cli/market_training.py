@@ -11,7 +11,11 @@ from stockbot.data.providers.yahoo_bootstrap import YahooBootstrapProvider
 from stockbot.data.snapshots import SnapshotStore
 from stockbot.research.factory import ResearchFactoryConfig
 from stockbot.research.jobs import make_job_manifest, make_run_summary, write_json_record
-from stockbot.research.market_training import run_snapshot_factory, train_snapshot
+from stockbot.research.market_training import (
+    run_snapshot_factory,
+    run_snapshot_regime_specialists,
+    train_snapshot,
+)
 from stockbot.research.population import ModelPopulationConfig
 
 
@@ -56,6 +60,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--factory-run-dir",
         default=None,
         help="Optional directory for scheduler-friendly job manifest and run summary JSON",
+    )
+    parser.add_argument(
+        "--factory-regime-specialists",
+        action="store_true",
+        help="After the main factory, train diagnostic bull/bear/chop specialists on the same snapshot",
+    )
+    parser.add_argument(
+        "--factory-specialists-top-k",
+        type=int,
+        default=2,
+        help="Generalist candidates per horizon admitted to regime-specialist research",
     )
     return parser
 
@@ -114,6 +129,8 @@ def run_from_args(args: argparse.Namespace) -> int:
 
     if args.factory:
         horizons = _parse_horizons(args.factory_horizons)
+        if args.factory_specialists_top_k <= 0:
+            raise ValueError("factory specialists top-k must be positive")
         config = ResearchFactoryConfig(
             horizons=horizons,
             population=ModelPopulationConfig(max_candidates=args.factory_candidates),
@@ -127,6 +144,7 @@ def run_from_args(args: argparse.Namespace) -> int:
             max_workers=args.factory_workers,
             memory_path=args.factory_memory,
         )
+        run_dir = None
         if args.factory_run_dir:
             run_dir = Path(args.factory_run_dir) / job_manifest.job_id
             write_json_record(run_dir / "job.json", job_manifest)
@@ -136,8 +154,19 @@ def run_from_args(args: argparse.Namespace) -> int:
             config=config,
             memory_path=args.factory_memory,
         )
-        if args.factory_run_dir:
-            write_json_record(run_dir / "summary.json", make_run_summary(job_manifest.job_id, report))
+        specialist_diagnostics = None
+        if args.factory_regime_specialists:
+            specialist_diagnostics = run_snapshot_regime_specialists(
+                snapshot,
+                report,
+                top_k_per_horizon=args.factory_specialists_top_k,
+            )
+
+        if run_dir is not None:
+            write_json_record(
+                run_dir / "summary.json",
+                make_run_summary(job_manifest.job_id, report, specialist_diagnostics),
+            )
 
         print("research_factory:")
         print(f"  job_id={job_manifest.job_id}")
@@ -155,12 +184,17 @@ def run_from_args(args: argparse.Namespace) -> int:
             q_value = float("nan") if candidate.discovery is None else candidate.discovery.q_value
             regime_score = float("nan") if candidate.regime_report is None else candidate.regime_report.score
             drift = "unknown" if candidate.drift_report is None else ("degraded" if candidate.drift_report.degraded else "stable")
+            readiness = (
+                "unknown"
+                if candidate.paper_readiness is None
+                else ("ready" if candidate.paper_readiness.ready else "not_ready")
+            )
             print(
                 f"  {index}. h={candidate.horizon} {candidate.model_name} "
                 f"research={candidate.factory_score:.6f} selection={candidate.selection_score:.6f} "
                 f"promotion={candidate.promotion_score:.6f} oos={candidate.oos_coverage:.3f} "
                 f"stress={candidate.stress_score:.3f} regime={regime_score:.3f} "
-                f"q={q_value:.4f} drift={drift} gate={gate} holdout={holdout}"
+                f"q={q_value:.4f} drift={drift} readiness={readiness} gate={gate} holdout={holdout}"
             )
         if report.ensemble_report is not None:
             ensemble = report.ensemble_report
@@ -173,6 +207,21 @@ def run_from_args(args: argparse.Namespace) -> int:
                 "horizon_ensemble_weights="
                 + ",".join(f"{key}:{weight:.4f}" for key, weight in ensemble.member_weights.items())
             )
+        if specialist_diagnostics is not None:
+            print(f"regime_specialist_candidate_pairs={specialist_diagnostics.candidate_pairs_tested}")
+            for regime_name, specialist in specialist_diagnostics.specialists.items():
+                print(
+                    f"regime_specialist={regime_name} h={specialist.horizon} "
+                    f"model={specialist.model_config.name} score={specialist.score:.6f} "
+                    f"oos={specialist.oos_coverage:.3f} stress={specialist.stress_report.score:.3f}"
+                )
+            if specialist_diagnostics.router_report is not None:
+                router = specialist_diagnostics.router_report
+                print(
+                    f"regime_router_score={router.score:.6f} "
+                    f"sharpe={router.metrics.get('sharpe', float('nan')):.3f} "
+                    f"stress={router.stress_report.score:.3f}"
+                )
         champion = report.champion_candidate
         if champion is None:
             print("factory_champion_candidate=none")
