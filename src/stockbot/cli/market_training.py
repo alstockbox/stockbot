@@ -119,13 +119,21 @@ def run_from_args(args: argparse.Namespace) -> int:
         )
         print("research_factory:")
         print(f"  experiments_run={report.experiments_run}")
-        print(f"  candidates_passed={report.candidates_passed}")
+        print(f"  promotion_candidates={report.candidates_passed}")
+        print(f"  holdout_evaluated={report.holdout_evaluated}")
+        print(f"  holdout_start={report.holdout_start}")
         for index, candidate in enumerate(report.candidates[:20], start=1):
             gate = "pass" if candidate.gate.passed else "reject"
+            holdout = (
+                "not_tested"
+                if candidate.holdout_report is None
+                else ("pass" if candidate.holdout_report.passed else "reject")
+            )
             print(
                 f"  {index}. h={candidate.horizon} {candidate.model_name} "
-                f"factory_score={candidate.factory_score:.6f} base_score={candidate.base_score:.6f} "
-                f"oos={candidate.oos_coverage:.3f} gate={gate}"
+                f"research={candidate.factory_score:.6f} promotion={candidate.promotion_score:.6f} "
+                f"oos={candidate.oos_coverage:.3f} stress={candidate.stress_score:.3f} "
+                f"gate={gate} holdout={holdout}"
             )
         champion = report.champion_candidate
         if champion is None:
