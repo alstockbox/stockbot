@@ -11,6 +11,7 @@ from stockbot.research.memory import ExperimentRecord, JsonlExperimentMemory
 from stockbot.research.multiple_testing import DiscoveryResult, benjamini_hochberg, evaluate_discoveries
 from stockbot.research.objective import ObjectiveWeights, risk_adjusted_objective
 from stockbot.research.population import ModelPopulationConfig, generate_model_population
+from stockbot.research.readiness import PaperReadinessReport, evaluate_paper_readiness
 from stockbot.research.regime_eval import RegimePerformanceReport, build_market_regime_series, evaluate_regime_performance
 from stockbot.research.stress import StressReport, StressScenario, default_stress_suite, evaluate_stress_suite
 
@@ -28,6 +29,7 @@ __all__ = [
     "JsonlExperimentMemory",
     "ModelPopulationConfig",
     "ObjectiveWeights",
+    "PaperReadinessReport",
     "RegimePerformanceReport",
     "ResearchFactory",
     "ResearchFactoryConfig",
@@ -42,6 +44,7 @@ __all__ = [
     "default_stress_suite",
     "evaluate_blind_holdout",
     "evaluate_discoveries",
+    "evaluate_paper_readiness",
     "evaluate_regime_performance",
     "evaluate_research_gate",
     "evaluate_return_drift",
