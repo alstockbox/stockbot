@@ -186,10 +186,16 @@ class ResearchFactory:
         *,
         holdout_start: pd.Timestamp,
     ) -> tuple[list[FactoryCandidate], int]:
-        passed = [candidate for candidate in candidates if candidate.gate.passed]
-        selected = passed[: self.config.holdout_top_k]
-        replacements: dict[str, FactoryCandidate] = {}
+        selected: list[FactoryCandidate] = []
+        for horizon in self.config.horizons:
+            horizon_passed = [
+                candidate
+                for candidate in candidates
+                if candidate.gate.passed and candidate.horizon == horizon
+            ]
+            selected.extend(horizon_passed[: self.config.holdout_top_k])
 
+        replacements: dict[str, FactoryCandidate] = {}
         for candidate in selected:
             model = ModelConfig(
                 candidate.model_name,
@@ -271,7 +277,7 @@ class ResearchFactory:
 
         champion = promotion_pool[0] if promotion_pool else None
         if champion is not None and previous_best_score is not None:
-            if champion.promotion_score < previous_best_score + self.config.promotion_margin:
+            if champion.factory_score < previous_best_score + self.config.promotion_margin:
                 champion = None
 
         return FactoryReport(
