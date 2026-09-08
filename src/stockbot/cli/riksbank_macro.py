@@ -35,6 +35,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--start-year", type=int, default=2020, help="First vintage year when collecting history")
     parser.add_argument("--end-year", type=int, default=None, help="Optional final vintage year")
+    parser.add_argument(
+        "--include-forecasts",
+        action="store_true",
+        help="Include fixed-horizon 3m/6m/12m forecast-vintage features in addition to realised macro data",
+    )
     return parser
 
 
@@ -64,13 +69,18 @@ def run_from_args(args: argparse.Namespace, *, provider=None) -> int:
 
     source = provider or RiksbankMonetaryPolicyProvider()
     if args.policy_round:
-        store = source.build_store(selected, policy_round=args.policy_round)
+        store = source.build_store(
+            selected,
+            policy_round=args.policy_round,
+            include_forecasts=args.include_forecasts,
+        )
         mode = f"round:{args.policy_round}"
     else:
         store = source.build_vintage_store(
             selected,
             start_year=args.start_year,
             end_year=args.end_year,
+            include_forecasts=args.include_forecasts,
         )
         end = "latest" if args.end_year is None else str(args.end_year)
         mode = f"vintages:{args.start_year}-{end}"
@@ -80,6 +90,7 @@ def run_from_args(args: argparse.Namespace, *, provider=None) -> int:
     print(f"output={output}")
     print(f"source={store.manifest.source}")
     print(f"mode={mode}")
+    print(f"include_forecasts={str(bool(args.include_forecasts)).lower()}")
     print(f"features={','.join(store.feature_names)}")
     print(f"observations={len(store.observations)}")
     print(f"fingerprint={store.fingerprint}")
