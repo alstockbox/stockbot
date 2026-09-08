@@ -26,6 +26,21 @@ class RiksbankSeries:
     kind: AuxiliaryFeatureKind = AuxiliaryFeatureKind.MACRO
 
 
+@dataclass(frozen=True)
+class RiksbankForecastHorizon:
+    suffix: str
+    days: int
+    tolerance_days: int
+
+    def __post_init__(self) -> None:
+        if not self.suffix.strip():
+            raise ValueError("forecast horizon suffix cannot be empty")
+        if self.days <= 0:
+            raise ValueError("forecast horizon days must be positive")
+        if self.tolerance_days < 0:
+            raise ValueError("forecast horizon tolerance_days cannot be negative")
+
+
 DEFAULT_SERIES = (
     RiksbankSeries("policy_rate", "SEQRATENAYNA"),
     RiksbankSeries("cpif_yoy", "SEMCPIFNAYNA"),
@@ -33,6 +48,12 @@ DEFAULT_SERIES = (
     RiksbankSeries("gdp_yoy_ca", "SEQGDPNAYCA"),
     RiksbankSeries("unemployment_rate", "SEQLABUEASA"),
     RiksbankSeries("kix_index", "SEQKIXNAANA"),
+)
+
+DEFAULT_FORECAST_HORIZONS = (
+    RiksbankForecastHorizon("3m", 91, 50),
+    RiksbankForecastHorizon("6m", 182, 70),
+    RiksbankForecastHorizon("12m", 365, 100),
 )
 
 
@@ -80,6 +101,16 @@ def _utc_timestamp(value, *, label: str) -> pd.Timestamp:
     if timestamp.tzinfo is None:
         return timestamp.tz_localize("UTC")
     return timestamp.tz_convert("UTC")
+
+
+def _numeric_value(value) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ProviderError("Riksbank monetary-policy value is not numeric") from exc
+    if not math.isfinite(result):
+        raise ProviderError("Riksbank monetary-policy value is not finite")
+    return result
 
 
 def _rows_from_payload(payload) -> tuple[list[dict], dict]:
@@ -159,11 +190,10 @@ def policy_round_names(payload) -> tuple[str, ...]:
 class RiksbankMonetaryPolicyProvider:
     """Point-in-time macro adapter for Sveriges Riksbank Monetary Policy Data API.
 
-    The provider deliberately refuses to infer publication time. A row is converted to
-    a StockBot auxiliary observation only when a cutoff/publication timestamp is present
-    either on the row itself or in response-level metadata. V1 materializes realised
-    observations only; future forecast targets are skipped until they have an explicit
-    horizon-aware feature schema.
+    Publication timing is never inferred. Realised values are materialized at the
+    source cutoff/publication timestamp. Optional forecast features use stable fixed
+    horizons and select the future target closest to each horizon within a configured
+    tolerance, preserving a deterministic feature schema across policy rounds.
     """
 
     name = "riksbank-monetary-policy"
@@ -253,13 +283,7 @@ class RiksbankMonetaryPolicyProvider:
             if raw_available is None:
                 raise ProviderError("Riksbank monetary-policy row lacks cutoff/publication time")
 
-            try:
-                value = float(raw_value)
-            except (TypeError, ValueError) as exc:
-                raise ProviderError("Riksbank monetary-policy value is not numeric") from exc
-            if not math.isfinite(value):
-                raise ProviderError("Riksbank monetary-policy value is not finite")
-
+            value = _numeric_value(raw_value)
             observation_time = _utc_timestamp(raw_date, label="observation date")
             available_time = _utc_timestamp(raw_available, label="cutoff/publication date")
             is_future_target = observation_time > available_time
@@ -267,7 +291,7 @@ class RiksbankMonetaryPolicyProvider:
                 continue
             if is_future_target:
                 raise ProviderError(
-                    "future Riksbank forecast rows require an explicit horizon-aware feature schema"
+                    "future Riksbank forecast rows require forecast_observations_from_payload"
                 )
 
             round_name = _first(row, _ROUND_KEYS) or metadata_round
@@ -290,6 +314,85 @@ class RiksbankMonetaryPolicyProvider:
 
         if not output:
             raise ProviderError("Riksbank payload contained no realised rows usable by the strategy")
+        return tuple(output)
+
+    def forecast_observations_from_payload(
+        self,
+        payload,
+        *,
+        feature_name: str,
+        series_id: str,
+        kind: AuxiliaryFeatureKind = AuxiliaryFeatureKind.MACRO,
+        horizons: tuple[RiksbankForecastHorizon, ...] | list[RiksbankForecastHorizon] = DEFAULT_FORECAST_HORIZONS,
+    ) -> tuple[PointInTimeFeatureObservation, ...]:
+        """Convert future targets into stable fixed-horizon vintage features."""
+
+        feature = str(feature_name or "").strip()
+        series = str(series_id or "").strip()
+        selected_horizons = tuple(horizons)
+        if not feature or not series:
+            raise ProviderError("feature_name and series_id are required")
+        if not selected_horizons:
+            raise ProviderError("at least one Riksbank forecast horizon is required")
+        if len({item.suffix for item in selected_horizons}) != len(selected_horizons):
+            raise ProviderError("Riksbank forecast horizon suffixes must be unique")
+
+        rows, metadata = _rows_from_payload(payload)
+        metadata_available = _first(metadata, _AVAILABLE_KEYS)
+        metadata_round = _first(metadata, _ROUND_KEYS)
+        grouped: dict[pd.Timestamp, list[tuple[pd.Timestamp, float, str | None]]] = {}
+
+        for row in rows:
+            raw_value = _first(row, _VALUE_KEYS)
+            raw_date = _first(row, _DATE_KEYS)
+            raw_available = _first(row, _AVAILABLE_KEYS)
+            if raw_available is None:
+                raw_available = metadata_available
+            if raw_value is None or raw_date is None:
+                raise ProviderError("Riksbank monetary-policy row lacks value/date")
+            if raw_available is None:
+                raise ProviderError("Riksbank monetary-policy row lacks cutoff/publication time")
+
+            target_time = _utc_timestamp(raw_date, label="forecast target date")
+            available_time = _utc_timestamp(raw_available, label="cutoff/publication date")
+            if target_time <= available_time:
+                continue
+            round_name = _first(row, _ROUND_KEYS) or metadata_round
+            grouped.setdefault(available_time, []).append(
+                (target_time, _numeric_value(raw_value), None if round_name is None else str(round_name))
+            )
+
+        output: list[PointInTimeFeatureObservation] = []
+        for available_time in sorted(grouped):
+            candidates = grouped[available_time]
+            for horizon in selected_horizons:
+                anchor = available_time + pd.Timedelta(days=horizon.days)
+                target_time, value, round_name = min(
+                    candidates,
+                    key=lambda item: (abs((item[0] - anchor).total_seconds()), item[0]),
+                )
+                distance_days = abs((target_time - anchor).total_seconds()) / 86400.0
+                if distance_days > horizon.tolerance_days:
+                    continue
+                revision_parts = [
+                    f"series={series}",
+                    f"target={target_time.isoformat()}",
+                    f"horizon={horizon.suffix}",
+                ]
+                if round_name is not None:
+                    revision_parts.append(f"round={round_name}")
+                output.append(
+                    PointInTimeFeatureObservation(
+                        feature_name=f"{feature}__forecast_{horizon.suffix}",
+                        value=value,
+                        observation_time=available_time.isoformat(),
+                        available_time=available_time.isoformat(),
+                        source=self.name,
+                        kind=kind,
+                        symbol=None,
+                        revision_id="|".join(revision_parts),
+                    )
+                )
         return tuple(output)
 
     def fetch_feature(
@@ -323,13 +426,33 @@ class RiksbankMonetaryPolicyProvider:
         series: tuple[RiksbankSeries, ...] | list[RiksbankSeries] = DEFAULT_SERIES,
         *,
         policy_round: str | None = None,
+        include_forecasts: bool = False,
+        forecast_horizons: tuple[RiksbankForecastHorizon, ...] | list[RiksbankForecastHorizon] = DEFAULT_FORECAST_HORIZONS,
     ) -> PointInTimeFeatureStore:
         requested = tuple(series)
         if not requested:
             raise ProviderError("at least one Riksbank series is required")
         observations: list[PointInTimeFeatureObservation] = []
         for item in requested:
-            observations.extend(self.fetch_feature(item, policy_round=policy_round))
+            payload = self.fetch_series_payload(item.series_id, policy_round=policy_round)
+            observations.extend(
+                self.observations_from_payload(
+                    payload,
+                    feature_name=item.feature_name,
+                    series_id=item.series_id,
+                    kind=item.kind,
+                )
+            )
+            if include_forecasts:
+                observations.extend(
+                    self.forecast_observations_from_payload(
+                        payload,
+                        feature_name=item.feature_name,
+                        series_id=item.series_id,
+                        kind=item.kind,
+                        horizons=forecast_horizons,
+                    )
+                )
         return self._store(observations)
 
     def build_vintage_store(
@@ -338,8 +461,10 @@ class RiksbankMonetaryPolicyProvider:
         *,
         start_year: int | None = 2020,
         end_year: int | None = None,
+        include_forecasts: bool = False,
+        forecast_horizons: tuple[RiksbankForecastHorizon, ...] | list[RiksbankForecastHorizon] = DEFAULT_FORECAST_HORIZONS,
     ) -> PointInTimeFeatureStore:
-        """Collect every requested series for each historical policy-round vintage."""
+        """Collect requested series for every historical policy-round vintage."""
 
         requested = tuple(series)
         if not requested:
@@ -348,13 +473,33 @@ class RiksbankMonetaryPolicyProvider:
         observations: list[PointInTimeFeatureObservation] = []
         for round_name in rounds:
             for item in requested:
-                observations.extend(self.fetch_feature(item, policy_round=round_name))
+                payload = self.fetch_series_payload(item.series_id, policy_round=round_name)
+                observations.extend(
+                    self.observations_from_payload(
+                        payload,
+                        feature_name=item.feature_name,
+                        series_id=item.series_id,
+                        kind=item.kind,
+                    )
+                )
+                if include_forecasts:
+                    observations.extend(
+                        self.forecast_observations_from_payload(
+                            payload,
+                            feature_name=item.feature_name,
+                            series_id=item.series_id,
+                            kind=item.kind,
+                            horizons=forecast_horizons,
+                        )
+                    )
         return self._store(observations)
 
 
 __all__ = [
     "BASE_URL",
+    "DEFAULT_FORECAST_HORIZONS",
     "DEFAULT_SERIES",
+    "RiksbankForecastHorizon",
     "RiksbankMonetaryPolicyProvider",
     "RiksbankSeries",
     "policy_round_names",
