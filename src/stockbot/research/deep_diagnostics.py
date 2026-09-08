@@ -6,12 +6,14 @@ from typing import Any
 import pandas as pd
 
 from stockbot.data.schemas import DatasetMetadata
+from stockbot.data.universe import PointInTimeUniverse
 from stockbot.ml.models import ModelConfig
 from stockbot.research.bootstrap_uncertainty import BootstrapUncertaintyReport, evaluate_block_bootstrap_uncertainty
 from stockbot.research.capacity_curve import CapacityCurveReport, evaluate_capacity_curve
 from stockbot.research.factor_exposure import FactorExposureReport, build_internal_factor_returns, evaluate_factor_exposure
 from stockbot.research.feature_ablation import FeatureAblationReport, evaluate_feature_group_ablation
 from stockbot.research.liquidity_execution import LiquidityExecutionConfig, LiquidityExecutionReport, simulate_liquidity_aware_execution
+from stockbot.research.neutralization import NeutralizationReport, evaluate_sector_factor_neutralization
 from stockbot.research.policy_search import PolicyArenaReport, evaluate_policy_arena
 from stockbot.research.stacking import StackingReport, evaluate_oos_stacking
 from stockbot.research.window_robustness import WindowRobustnessReport, evaluate_training_window_robustness
@@ -29,6 +31,7 @@ class CandidateDeepDiagnostics:
     capacity_curve: CapacityCurveReport
     window_robustness: WindowRobustnessReport
     feature_ablation: FeatureAblationReport
+    neutralization: NeutralizationReport | None = None
 
 
 @dataclass(frozen=True)
@@ -126,6 +129,7 @@ def run_deep_research_diagnostics(
     bootstrap_block_size: int = 21,
     bootstrap_samples: int = 500,
     bootstrap_confidence_level: float = 0.90,
+    point_in_time_universe: PointInTimeUniverse | None = None,
 ) -> DeepResearchDiagnostics:
     """Run expensive diagnostics only on top generalists and only before blind holdout."""
 
@@ -157,6 +161,15 @@ def run_deep_research_diagnostics(
         factor_exposure = evaluate_factor_exposure(policy.best.net_returns, factor_returns)
         if candidate.result.predictions is None:
             raise ValueError("deep diagnostics require retained OOS predictions")
+        neutralization = None
+        if point_in_time_universe is not None:
+            neutralization = evaluate_sector_factor_neutralization(
+                research_bars,
+                candidate.result.predictions,
+                point_in_time_universe,
+                top_fraction=best_policy.top_fraction,
+                weighting=best_policy.weighting,
+            )
         liquidity = simulate_liquidity_aware_execution(
             research_bars,
             candidate.result.predictions,
@@ -201,6 +214,7 @@ def run_deep_research_diagnostics(
             capacity_curve=capacity_curve,
             window_robustness=windows,
             feature_ablation=ablation,
+            neutralization=neutralization,
         )
 
     stacking_reports: dict[int, StackingReport] = {}
@@ -245,6 +259,22 @@ def compact_deep_diagnostics(diagnostics: DeepResearchDiagnostics) -> dict[str, 
     rows: dict[str, object] = {}
     for experiment_id, item in diagnostics.candidates.items():
         baseline_score = None if item.policy_arena.baseline is None else item.policy_arena.baseline.score
+        neutralization = None
+        if item.neutralization is not None:
+            neutralization = {
+                "baseline_score": item.neutralization.baseline_score,
+                "neutralized_score": item.neutralization.neutralized_score,
+                "score_delta": item.neutralization.score_delta,
+                "sector_coverage": item.neutralization.sector_coverage,
+                "prediction_coverage": item.neutralization.prediction_coverage,
+                "sector_mean_before": item.neutralization.average_abs_sector_mean_before,
+                "sector_mean_after": item.neutralization.average_abs_sector_mean_after,
+                "factor_correlations_before": dict(item.neutralization.factor_correlations_before),
+                "factor_correlations_after": dict(item.neutralization.factor_correlations_after),
+                "neutralized_sharpe": item.neutralization.neutralized_metrics.get("sharpe", 0.0),
+                "neutralized_cagr": item.neutralization.neutralized_metrics.get("cagr", 0.0),
+                "neutralized_stress": item.neutralization.neutralized_stress.score,
+            }
         rows[experiment_id] = {
             "horizon": item.horizon,
             "model_name": item.model_name,
@@ -288,6 +318,7 @@ def compact_deep_diagnostics(diagnostics: DeepResearchDiagnostics) -> dict[str, 
                 "residual_cagr": item.factor_exposure.residual_metrics.get("cagr", 0.0),
                 "observations": item.factor_exposure.observations,
             },
+            "neutralization": neutralization,
             "liquidity_execution": {
                 "score": item.liquidity_execution.score,
                 "partial_fill_fraction": item.liquidity_execution.partial_fill_fraction,
