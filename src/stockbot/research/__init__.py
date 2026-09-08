@@ -1,4 +1,5 @@
 from stockbot.research.adaptive_population import AdaptivePopulationConfig, generate_adaptive_population
+from stockbot.research.capacity_curve import CapacityCurveReport, CapacityPoint, evaluate_capacity_curve
 from stockbot.research.champion import ChampionState, JsonChampionStore
 from stockbot.research.deep_diagnostics import CandidateDeepDiagnostics, DeepResearchDiagnostics, compact_deep_diagnostics, run_deep_research_diagnostics
 from stockbot.research.drift import DriftReport, evaluate_return_drift
@@ -26,6 +27,8 @@ from stockbot.research.window_robustness import WindowResult, WindowRobustnessRe
 __all__ = [
     "AdaptivePopulationConfig",
     "CandidateDeepDiagnostics",
+    "CapacityCurveReport",
+    "CapacityPoint",
     "ChampionState",
     "DeepResearchDiagnostics",
     "DiscoveryResult",
@@ -66,6 +69,7 @@ __all__ = [
     "compact_deep_diagnostics",
     "default_stress_suite",
     "evaluate_blind_holdout",
+    "evaluate_capacity_curve",
     "evaluate_discoveries",
     "evaluate_feature_group_ablation",
     "evaluate_paper_readiness",
