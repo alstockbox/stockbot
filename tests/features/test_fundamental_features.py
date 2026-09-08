@@ -91,7 +91,7 @@ def test_derived_fundamentals_are_computed_inside_same_filing_vintage():
         assert frame.iloc[1][name] == value
 
 
-def test_zero_denominator_does_not_emit_infinite_derived_features():
+def test_zero_denominator_does_not_emit_infinite_margin_features():
     zero_revenue = _xbrl().replace(
         b'<se:Nettoomsattning contextRef="p2025" unitRef="SEK">125</se:Nettoomsattning>',
         b'<se:Nettoomsattning contextRef="p2025" unitRef="SEK">0</se:Nettoomsattning>',
@@ -101,4 +101,9 @@ def test_zero_denominator_does_not_emit_infinite_derived_features():
     names = set(store.feature_names)
     assert "operating_margin" not in names
     assert "net_margin" not in names
-    assert "revenue_yoy" not in names
+    revenue_yoy = next(
+        observation
+        for observation in store.observations
+        if observation.feature_name == "revenue_yoy"
+    )
+    assert revenue_yoy.value == -1.0
