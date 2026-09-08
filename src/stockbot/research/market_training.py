@@ -14,6 +14,7 @@ from stockbot.research.deep_diagnostics import DeepResearchDiagnostics, run_deep
 from stockbot.research.factory import FactoryReport, ResearchFactory, ResearchFactoryConfig
 from stockbot.research.liquidity_execution import LiquidityExecutionConfig
 from stockbot.research.memory import JsonlExperimentMemory
+from stockbot.research.quarantine import QuarantineConfig, persist_sealed_quarantine, split_sealed_quarantine
 from stockbot.research.specialist_pipeline import RegimeSpecialistDiagnostics, run_regime_specialist_diagnostics
 from stockbot.research.training_pipeline import TrainingRun, run_training_research
 
@@ -55,13 +56,30 @@ def _snapshot_metadata(snapshot: MarketSnapshot) -> DatasetMetadata:
     )
 
 
+def _development_bars(
+    snapshot: MarketSnapshot,
+    quarantine_config: QuarantineConfig | None,
+    quarantine_manifest_path: str | Path | None = None,
+) -> pd.DataFrame:
+    bars = prepare_training_bars(snapshot.bars)
+    if quarantine_config is None:
+        return bars
+    split = split_sealed_quarantine(bars, quarantine_config)
+    if quarantine_manifest_path is not None:
+        persist_sealed_quarantine(quarantine_manifest_path, split, quarantine_config)
+    return split.development_bars
+
+
 def train_snapshot(
     snapshot: MarketSnapshot,
     model_configs=None,
     horizon: int = 5,
+    *,
+    quarantine_config: QuarantineConfig | None = None,
+    quarantine_manifest_path: str | Path | None = None,
 ) -> TrainingRun:
     return run_training_research(
-        prepare_training_bars(snapshot.bars),
+        _development_bars(snapshot, quarantine_config, quarantine_manifest_path),
         _snapshot_metadata(snapshot),
         model_configs=model_configs,
         horizon=horizon,
@@ -73,8 +91,10 @@ def run_snapshot_factory(
     *,
     config: ResearchFactoryConfig | None = None,
     memory_path: str | None = None,
+    quarantine_config: QuarantineConfig | None = None,
+    quarantine_manifest_path: str | Path | None = None,
 ) -> FactoryReport:
-    """Run V2 on an immutable snapshot, evolving challengers from prior memory when available."""
+    """Run V2 on development data only, evolving challengers from prior memory."""
 
     memory = JsonlExperimentMemory(memory_path) if memory_path else None
     champion_store = None
@@ -105,7 +125,7 @@ def run_snapshot_factory(
         champion_store=champion_store,
     )
     return factory.run(
-        prepare_training_bars(snapshot.bars),
+        _development_bars(snapshot, quarantine_config, quarantine_manifest_path),
         _snapshot_metadata(snapshot),
     )
 
@@ -115,11 +135,13 @@ def run_snapshot_regime_specialists(
     report: FactoryReport,
     *,
     top_k_per_horizon: int = 2,
+    quarantine_config: QuarantineConfig | None = None,
+    quarantine_manifest_path: str | Path | None = None,
 ) -> RegimeSpecialistDiagnostics:
-    """Run the optional V2.1 regime-specialist diagnostics on a finished factory report."""
+    """Run regime-specialist diagnostics without exposing sealed quarantine data."""
 
     return run_regime_specialist_diagnostics(
-        prepare_training_bars(snapshot.bars),
+        _development_bars(snapshot, quarantine_config, quarantine_manifest_path),
         _snapshot_metadata(snapshot),
         report.candidates,
         top_k_per_horizon=top_k_per_horizon,
@@ -145,11 +167,13 @@ def run_snapshot_deep_diagnostics(
         2_500_000.0,
         5_000_000.0,
     ),
+    quarantine_config: QuarantineConfig | None = None,
+    quarantine_manifest_path: str | Path | None = None,
 ) -> DeepResearchDiagnostics:
-    """Run holdout-safe policy/window/feature/capacity diagnostics from one immutable snapshot."""
+    """Run holdout-safe deep diagnostics without exposing sealed quarantine data."""
 
     return run_deep_research_diagnostics(
-        prepare_training_bars(snapshot.bars),
+        _development_bars(snapshot, quarantine_config, quarantine_manifest_path),
         _snapshot_metadata(snapshot),
         report,
         top_k_per_horizon=top_k_per_horizon,
