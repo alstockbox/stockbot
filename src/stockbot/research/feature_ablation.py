@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from stockbot.data.point_in_time_features import PointInTimeFeatureStore
 from stockbot.data.schemas import DatasetMetadata
 from stockbot.ml.models import ModelConfig
 from stockbot.research.training_pipeline import FEATURE_COLUMNS, run_training_research
@@ -92,12 +93,17 @@ def evaluate_feature_group_ablation(
     drop_improvement_threshold: float = 0.05,
     train_periods: int | None = None,
     test_periods: int | None = None,
+    feature_columns: tuple[str, ...] | list[str] | None = None,
+    auxiliary_store: PointInTimeFeatureStore | None = None,
+    auxiliary_feature_names: tuple[str, ...] | list[str] | None = None,
+    auxiliary_max_age_days: int | None = None,
+    auxiliary_min_coverage: float = 0.80,
 ) -> FeatureAblationReport:
-    """Refit one challenger after removing each feature group from the research set.
+    """Refit one challenger after removing each base feature group.
 
-    `score_impact = baseline - ablated`; positive impact means the removed group was
-    useful, while a sufficiently negative impact marks the group as a candidate for
-    removal in a later feature-subset experiment. No feature is automatically deleted.
+    Auxiliary point-in-time features stay fixed unless explicitly included in a custom
+    group. This makes the baseline and each ablation replay the candidate's exact
+    external-data contract instead of silently reverting to price-only features.
     """
 
     if horizon <= 0:
@@ -114,15 +120,23 @@ def evaluate_feature_group_ablation(
         max_workers=1,
         train_periods=train_periods,
         test_periods=test_periods,
-        feature_columns=FEATURE_COLUMNS,
+        feature_columns=feature_columns,
+        auxiliary_store=auxiliary_store,
+        auxiliary_feature_names=auxiliary_feature_names,
+        auxiliary_max_age_days=auxiliary_max_age_days,
+        auxiliary_min_coverage=auxiliary_min_coverage,
     )
     if not baseline_run.leaderboard:
         raise ValueError("baseline feature experiment produced no result")
     baseline = baseline_run.leaderboard[0]
+    baseline_features = tuple(baseline.artifact.feature_names)
 
     results: list[FeatureAblationResult] = []
     for group_name, features_to_remove in feature_groups.items():
-        selected = tuple(feature for feature in FEATURE_COLUMNS if feature not in set(features_to_remove))
+        removed = tuple(feature for feature in features_to_remove if feature in baseline_features)
+        if not removed:
+            continue
+        selected = tuple(feature for feature in baseline_features if feature not in set(removed))
         if not selected:
             continue
         run = run_training_research(
@@ -134,6 +148,10 @@ def evaluate_feature_group_ablation(
             train_periods=train_periods,
             test_periods=test_periods,
             feature_columns=selected,
+            auxiliary_store=auxiliary_store,
+            auxiliary_feature_names=auxiliary_feature_names,
+            auxiliary_max_age_days=auxiliary_max_age_days,
+            auxiliary_min_coverage=auxiliary_min_coverage,
         )
         if not run.leaderboard:
             continue
@@ -141,7 +159,7 @@ def evaluate_feature_group_ablation(
         results.append(
             FeatureAblationResult(
                 group=str(group_name),
-                removed_features=tuple(features_to_remove),
+                removed_features=removed,
                 ablated_score=float(ablated.score),
                 score_impact=float(baseline.score - ablated.score),
                 ablated_sharpe=float(ablated.metrics.get("sharpe", 0.0)),
