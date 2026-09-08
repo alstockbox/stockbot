@@ -109,11 +109,16 @@ def test_vectorized_materialization_matches_reference_with_max_age_and_stale_spe
     pd.testing.assert_frame_equal(actual, expected)
 
     # AAA has a visible symbol-specific macro observation on 2026-02-25. It is stale
-    # relative to its Jan-15 observation time, so the correct result is NaN rather than
-    # falling back to the still-fresh global Feb-01 macro observation.
-    assert pd.isna(
-        actual.loc[(pd.Timestamp("2026-02-25", tz="UTC"), "AAA"), "macro"]
-    )
+    # relative to its Jan-15 observation time, so every matching duplicate row must be
+    # NaN rather than falling back to the global Feb-01 macro observation.
+    timestamps = actual.index.get_level_values("timestamp")
+    symbols = actual.index.get_level_values("symbol")
+    stale_rows = actual.loc[
+        (timestamps == pd.Timestamp("2026-02-25", tz="UTC")) & (symbols == "AAA"),
+        "macro",
+    ]
+    assert len(stale_rows) >= 1
+    assert stale_rows.isna().all()
 
 
 def test_vectorized_materialization_matches_reference_for_symbol_timestamp_level_order():
