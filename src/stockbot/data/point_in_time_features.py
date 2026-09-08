@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import Enum
+import hashlib
+import json
 
 import numpy as np
 import pandas as pd
@@ -68,6 +70,8 @@ class PointInTimeFeatureStore:
     which is broadcast to every symbol at a given timestamp.
     """
 
+    SCHEMA_VERSION = 1
+
     def __init__(
         self,
         observations: list[PointInTimeFeatureObservation] | tuple[PointInTimeFeatureObservation, ...],
@@ -118,7 +122,7 @@ class PointInTimeFeatureStore:
             )
         frame = pd.DataFrame(rows)
         return frame.sort_values(
-            ["feature_name", "symbol", "observation_time", "available_time"],
+            ["feature_name", "symbol", "observation_time", "available_time", "revision_id"],
             na_position="first",
             kind="mergesort",
         ).reset_index(drop=True)
@@ -126,6 +130,75 @@ class PointInTimeFeatureStore:
     @property
     def feature_names(self) -> tuple[str, ...]:
         return tuple(sorted(self._frame["feature_name"].unique()))
+
+    def to_payload(self) -> dict[str, object]:
+        """Return a canonical JSON-safe payload used for persistence and identity."""
+
+        manifest = asdict(self.manifest)
+        observations: list[dict[str, object]] = []
+        for row in self._frame.itertuples(index=False):
+            observations.append(
+                {
+                    "feature_name": str(row.feature_name),
+                    "value_hex": float(row.value).hex(),
+                    "observation_time": pd.Timestamp(row.observation_time).isoformat(),
+                    "available_time": pd.Timestamp(row.available_time).isoformat(),
+                    "source": str(row.source),
+                    "kind": str(row.kind),
+                    "symbol": None if pd.isna(row.symbol) else str(row.symbol),
+                    "revision_id": None if pd.isna(row.revision_id) else str(row.revision_id),
+                }
+            )
+        return {
+            "schema_version": self.SCHEMA_VERSION,
+            "manifest": manifest,
+            "observations": observations,
+        }
+
+    @property
+    def fingerprint(self) -> str:
+        raw = json.dumps(
+            self.to_payload(),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(raw).hexdigest()
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, object]) -> "PointInTimeFeatureStore":
+        if int(payload.get("schema_version", -1)) != cls.SCHEMA_VERSION:
+            raise ValueError("unsupported point-in-time feature store schema version")
+        raw_manifest = payload.get("manifest")
+        raw_observations = payload.get("observations")
+        if not isinstance(raw_manifest, dict) or not isinstance(raw_observations, list):
+            raise ValueError("invalid point-in-time feature store payload")
+        manifest = PointInTimeFeatureManifest(
+            source=str(raw_manifest["source"]),
+            point_in_time=bool(raw_manifest["point_in_time"]),
+            revision_aware=bool(raw_manifest["revision_aware"]),
+            available_time_semantics=str(
+                raw_manifest.get("available_time_semantics", "first_usable_by_strategy")
+            ),
+        )
+        observations: list[PointInTimeFeatureObservation] = []
+        for raw in raw_observations:
+            if not isinstance(raw, dict):
+                raise ValueError("invalid point-in-time feature observation payload")
+            observations.append(
+                PointInTimeFeatureObservation(
+                    feature_name=str(raw["feature_name"]),
+                    value=float.fromhex(str(raw["value_hex"])),
+                    observation_time=str(raw["observation_time"]),
+                    available_time=str(raw["available_time"]),
+                    source=str(raw["source"]),
+                    kind=AuxiliaryFeatureKind(str(raw["kind"])),
+                    symbol=None if raw.get("symbol") is None else str(raw["symbol"]),
+                    revision_id=(
+                        None if raw.get("revision_id") is None else str(raw["revision_id"])
+                    ),
+                )
+            )
+        return cls(tuple(observations), manifest)
 
     def _value_asof(
         self,
