@@ -5,6 +5,12 @@ from stockbot.data.point_in_time_features import (
     PointInTimeFeatureObservation,
     PointInTimeFeatureStore,
 )
+from stockbot.data.research_inputs import (
+    load_point_in_time_feature_store,
+    load_point_in_time_universe,
+    write_point_in_time_feature_store,
+    write_point_in_time_universe,
+)
 from stockbot.data.research_quality import (
     ResearchDataAttestation,
     ResearchDataQualityCriteria,
@@ -36,5 +42,9 @@ __all__ = [
     "UniverseManifest",
     "UniverseMembership",
     "evaluate_research_data_quality",
+    "load_point_in_time_feature_store",
+    "load_point_in_time_universe",
     "verified_data_grade",
+    "write_point_in_time_feature_store",
+    "write_point_in_time_universe",
 ]
