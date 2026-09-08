@@ -22,10 +22,15 @@ class ExperimentConfig:
     top_fraction: float = 0.30
     commission_bps: float = 1.0
     slippage_bps: float = 2.0
+    weighting: str = "equal"
 
     def __post_init__(self) -> None:
         if not 0 < self.top_fraction <= 1:
             raise ValueError("top_fraction must be in (0,1]")
+        if self.commission_bps < 0 or self.slippage_bps < 0:
+            raise ValueError("trading costs cannot be negative")
+        if self.weighting not in {"equal", "conviction"}:
+            raise ValueError("weighting must be 'equal' or 'conviction'")
 
 
 @dataclass(frozen=True)
@@ -41,7 +46,13 @@ class ModelExperimentResult:
     predictions: pd.Series | None = None
 
 
-def _signal_weights(predictions: pd.Series, top_fraction: float) -> pd.DataFrame:
+def _signal_weights(
+    predictions: pd.Series,
+    top_fraction: float,
+    weighting: str = "equal",
+) -> pd.DataFrame:
+    if weighting not in {"equal", "conviction"}:
+        raise ValueError("weighting must be 'equal' or 'conviction'")
     matrix = predictions.unstack("symbol").sort_index()
     weights = pd.DataFrame(0.0, index=matrix.index, columns=matrix.columns)
     for dt, row in matrix.iterrows():
@@ -50,8 +61,16 @@ def _signal_weights(predictions: pd.Series, top_fraction: float) -> pd.DataFrame
         if positive.empty:
             continue
         n = max(1, int(math.ceil(len(valid) * top_fraction)))
-        selected = positive.iloc[:n].index
-        weights.loc[dt, selected] = 1.0 / len(selected)
+        selected = positive.iloc[:n]
+        if weighting == "equal":
+            weights.loc[dt, selected.index] = 1.0 / len(selected)
+        else:
+            conviction = selected.clip(lower=0.0)
+            total = float(conviction.sum())
+            if total <= 0.0 or not math.isfinite(total):
+                weights.loc[dt, selected.index] = 1.0 / len(selected)
+            else:
+                weights.loc[dt, selected.index] = conviction / total
     return weights
 
 
@@ -61,7 +80,11 @@ def _evaluate_panel_predictions(
     config: ExperimentConfig,
 ) -> tuple[dict[str, float], float, pd.Series, pd.Series]:
     close = panel["close"].unstack("symbol").sort_index().astype(float)
-    signal_weights = _signal_weights(predictions, config.top_fraction).reindex(close.index).fillna(0.0)
+    signal_weights = _signal_weights(
+        predictions,
+        config.top_fraction,
+        config.weighting,
+    ).reindex(close.index).fillna(0.0)
     executed = signal_weights.shift(1).fillna(0.0)
     asset_returns = close.pct_change().fillna(0.0)
     gross = (executed * asset_returns).sum(axis=1)
