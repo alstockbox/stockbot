@@ -48,7 +48,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--factory-deep-top-k", type=int, default=1, help="Generalist candidates per horizon admitted to deep diagnostics")
     parser.add_argument("--factory-train-windows", default="126,252,504", help="Comma-separated walk-forward training windows for deep diagnostics")
     parser.add_argument("--factory-diagnostic-test-periods", type=int, default=21, help="OOS test-window length used by deep diagnostics")
-    parser.add_argument("--factory-diagnostic-capital", type=float, default=100_000.0, help="Portfolio capital used for liquidity/capacity stress")
+    parser.add_argument("--factory-diagnostic-capital", type=float, default=100_000.0, help="Reference portfolio capital used for the single liquidity stress")
+    parser.add_argument(
+        "--factory-diagnostic-capital-grid",
+        default="10000,25000,50000,100000,250000,500000,1000000,2500000,5000000",
+        help="Comma-separated capital levels used to estimate the strategy capacity curve",
+    )
     parser.add_argument("--factory-diagnostic-max-participation", type=float, default=0.05, help="Maximum fraction of lagged ADV that may be traded per symbol/day")
     parser.add_argument("--factory-diagnostic-spread-bps", type=float, default=4.0, help="Full execution spread assumption in basis points")
     parser.add_argument("--factory-diagnostic-impact-bps", type=float, default=10.0, help="Square-root market impact in bps at 1 percent ADV participation")
@@ -79,6 +84,18 @@ def _parse_positive_ints(value: str, label: str) -> tuple[int, ...]:
         raise ValueError(f"{label} must be comma-separated integers") from exc
     if not parsed or any(item <= 0 for item in parsed):
         raise ValueError(f"{label} must contain positive integers")
+    if len(set(parsed)) != len(parsed):
+        raise ValueError(f"{label} must be unique")
+    return parsed
+
+
+def _parse_positive_floats(value: str, label: str) -> tuple[float, ...]:
+    try:
+        parsed = tuple(float(item.strip()) for item in value.split(",") if item.strip())
+    except ValueError as exc:
+        raise ValueError(f"{label} must be comma-separated numbers") from exc
+    if not parsed or any(item <= 0.0 for item in parsed):
+        raise ValueError(f"{label} must contain positive values")
     if len(set(parsed)) != len(parsed):
         raise ValueError(f"{label} must be unique")
     return parsed
@@ -116,6 +133,7 @@ def run_from_args(args: argparse.Namespace) -> int:
     if args.factory:
         horizons = _parse_horizons(args.factory_horizons)
         train_windows = _parse_positive_ints(args.factory_train_windows, "factory train windows")
+        capital_levels = _parse_positive_floats(args.factory_diagnostic_capital_grid, "factory diagnostic capital grid")
         if args.factory_specialists_top_k <= 0:
             raise ValueError("factory specialists top-k must be positive")
         if args.factory_deep_top_k <= 0:
@@ -180,6 +198,7 @@ def run_from_args(args: argparse.Namespace) -> int:
                 train_windows=train_windows,
                 test_periods=args.factory_diagnostic_test_periods,
                 liquidity_config=liquidity_config,
+                capacity_levels=capital_levels,
             )
 
         if run_dir is not None:
@@ -238,14 +257,19 @@ def run_from_args(args: argparse.Namespace) -> int:
                 f"spread_bps:{args.factory_diagnostic_spread_bps:.2f},"
                 f"impact_bps:{args.factory_diagnostic_impact_bps:.2f}"
             )
+            print("deep_capacity_grid=" + ",".join(f"{capital:.0f}" for capital in capital_levels))
             for experiment_id, diagnostic in deep_diagnostics.candidates.items():
                 best_policy = diagnostic.policy_arena.best
                 liquidity = diagnostic.liquidity_execution
+                capacity = diagnostic.capacity_curve
+                max_capacity = "none" if capacity.max_effective_capital is None else f"{capacity.max_effective_capital:.0f}"
+                first_break = "none" if capacity.first_break_capital is None else f"{capacity.first_break_capital:.0f}"
                 print(
                     f"deep={experiment_id} h={diagnostic.horizon} model={diagnostic.model_name} "
                     f"policy={best_policy.policy.top_fraction:.2f}/{best_policy.policy.weighting} "
                     f"policy_score={best_policy.score:.6f} liquidity_score={liquidity.score:.6f} "
                     f"partial_fill={liquidity.partial_fill_fraction:.3f} tracking={liquidity.average_tracking_error:.3f} "
+                    f"capacity_score={capacity.capacity_score:.3f} max_capacity={max_capacity} first_break={first_break} "
                     f"window_score={diagnostic.window_robustness.score:.3f} "
                     f"drop_groups={','.join(diagnostic.feature_ablation.recommended_drop_groups) or 'none'}"
                 )
