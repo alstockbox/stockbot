@@ -10,6 +10,7 @@ from stockbot.data.market_schema import validate_canonical_bars
 from stockbot.data.schemas import DatasetMetadata
 from stockbot.data.snapshots import MarketSnapshot
 from stockbot.research.champion import JsonChampionStore
+from stockbot.research.deep_diagnostics import DeepResearchDiagnostics, run_deep_research_diagnostics
 from stockbot.research.factory import FactoryReport, ResearchFactory, ResearchFactoryConfig
 from stockbot.research.memory import JsonlExperimentMemory
 from stockbot.research.specialist_pipeline import RegimeSpecialistDiagnostics, run_regime_specialist_diagnostics
@@ -121,4 +122,24 @@ def run_snapshot_regime_specialists(
         _snapshot_metadata(snapshot),
         report.candidates,
         top_k_per_horizon=top_k_per_horizon,
+    )
+
+
+def run_snapshot_deep_diagnostics(
+    snapshot: MarketSnapshot,
+    report: FactoryReport,
+    *,
+    top_k_per_horizon: int = 1,
+    train_windows: tuple[int, ...] = (126, 252, 504),
+    test_periods: int = 21,
+) -> DeepResearchDiagnostics:
+    """Run holdout-safe policy/window/feature diagnostics from one immutable snapshot."""
+
+    return run_deep_research_diagnostics(
+        prepare_training_bars(snapshot.bars),
+        _snapshot_metadata(snapshot),
+        report,
+        top_k_per_horizon=top_k_per_horizon,
+        train_windows=train_windows,
+        test_periods=test_periods,
     )
