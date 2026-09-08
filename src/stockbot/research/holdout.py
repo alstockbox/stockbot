@@ -8,12 +8,12 @@ import pandas as pd
 
 from stockbot.arena.experiments import ExperimentConfig, _evaluate_panel_predictions
 from stockbot.data.panel import build_panel
-from stockbot.features.cross_sectional import add_cross_sectional_features
+from stockbot.data.point_in_time_features import PointInTimeFeatureStore
+from stockbot.features.research_matrix import build_research_feature_matrix
 from stockbot.ml.labels import make_panel_labels
 from stockbot.ml.models import ModelConfig, build_model
 from stockbot.research.objective import ObjectiveWeights, risk_adjusted_objective
 from stockbot.research.stress import StressReport, evaluate_stress_suite
-from stockbot.research.training_pipeline import FEATURE_COLUMNS
 
 
 @dataclass(frozen=True)
@@ -85,14 +85,27 @@ def evaluate_blind_holdout(
     objective: ObjectiveWeights | None = None,
     top_fraction: float = 0.30,
     weighting: str = "equal",
+    feature_columns: tuple[str, ...] | list[str] | None = None,
+    auxiliary_store: PointInTimeFeatureStore | None = None,
+    auxiliary_feature_names: tuple[str, ...] | list[str] | None = None,
+    auxiliary_max_age_days: int | None = None,
+    auxiliary_min_coverage: float = 0.80,
 ) -> HoldoutReport:
-    """Fit only on pre-holdout observations and score only the untouched final block."""
+    """Fit on pre-holdout rows and replay the exact causal feature contract on holdout."""
 
     if horizon <= 0:
         raise ValueError("horizon must be positive")
     cfg = config or HoldoutConfig()
     panel = build_panel(bars)
-    features = add_cross_sectional_features(panel).loc[:, FEATURE_COLUMNS]
+    matrix = build_research_feature_matrix(
+        panel,
+        feature_columns=feature_columns,
+        auxiliary_store=auxiliary_store,
+        auxiliary_feature_names=auxiliary_feature_names,
+        auxiliary_max_age_days=auxiliary_max_age_days,
+        auxiliary_min_coverage=auxiliary_min_coverage,
+    )
+    features = matrix.frame
     labels = make_panel_labels(panel, horizons=(horizon,))[f"fwd_return_{horizon}"]
     labels.name = f"fwd_return_{horizon}"
 
