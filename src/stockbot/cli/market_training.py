@@ -9,9 +9,11 @@ from stockbot.data.providers.http import ProviderError
 from stockbot.data.providers.tiingo import TiingoProvider
 from stockbot.data.providers.yahoo_bootstrap import YahooBootstrapProvider
 from stockbot.data.snapshots import SnapshotStore
+from stockbot.research.deep_diagnostics import compact_deep_diagnostics
 from stockbot.research.factory import ResearchFactoryConfig
-from stockbot.research.jobs import make_job_manifest, make_run_summary, write_json_record
+from stockbot.research.jobs import make_job_manifest, make_run_summary, write_json_payload, write_json_record
 from stockbot.research.market_training import (
+    run_snapshot_deep_diagnostics,
     run_snapshot_factory,
     run_snapshot_regime_specialists,
     train_snapshot,
@@ -59,7 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--factory-run-dir",
         default=None,
-        help="Optional directory for scheduler-friendly job manifest and run summary JSON",
+        help="Optional directory for scheduler-friendly job manifest and research artifacts",
     )
     parser.add_argument(
         "--factory-regime-specialists",
@@ -71,6 +73,28 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=2,
         help="Generalist candidates per horizon admitted to regime-specialist research",
+    )
+    parser.add_argument(
+        "--factory-deep-diagnostics",
+        action="store_true",
+        help="Run expensive pre-holdout policy/window/feature diagnostics on top generalists",
+    )
+    parser.add_argument(
+        "--factory-deep-top-k",
+        type=int,
+        default=1,
+        help="Generalist candidates per horizon admitted to deep diagnostics",
+    )
+    parser.add_argument(
+        "--factory-train-windows",
+        default="126,252,504",
+        help="Comma-separated walk-forward training windows for deep diagnostics",
+    )
+    parser.add_argument(
+        "--factory-diagnostic-test-periods",
+        type=int,
+        default=21,
+        help="OOS test-window length used by deep diagnostics",
     )
     return parser
 
@@ -90,16 +114,20 @@ def _parse_symbols(value: str) -> list[str]:
     return [item.strip().upper() for item in value.split(",") if item.strip()]
 
 
-def _parse_horizons(value: str) -> tuple[int, ...]:
+def _parse_positive_ints(value: str, label: str) -> tuple[int, ...]:
     try:
-        horizons = tuple(int(item.strip()) for item in value.split(",") if item.strip())
+        parsed = tuple(int(item.strip()) for item in value.split(",") if item.strip())
     except ValueError as exc:
-        raise ValueError("factory horizons must be comma-separated integers") from exc
-    if not horizons or any(horizon <= 0 for horizon in horizons):
-        raise ValueError("factory horizons must contain positive integers")
-    if len(set(horizons)) != len(horizons):
-        raise ValueError("factory horizons must be unique")
-    return horizons
+        raise ValueError(f"{label} must be comma-separated integers") from exc
+    if not parsed or any(item <= 0 for item in parsed):
+        raise ValueError(f"{label} must contain positive integers")
+    if len(set(parsed)) != len(parsed):
+        raise ValueError(f"{label} must be unique")
+    return parsed
+
+
+def _parse_horizons(value: str) -> tuple[int, ...]:
+    return _parse_positive_ints(value, "factory horizons")
 
 
 def run_from_args(args: argparse.Namespace) -> int:
@@ -129,8 +157,14 @@ def run_from_args(args: argparse.Namespace) -> int:
 
     if args.factory:
         horizons = _parse_horizons(args.factory_horizons)
+        train_windows = _parse_positive_ints(args.factory_train_windows, "factory train windows")
         if args.factory_specialists_top_k <= 0:
             raise ValueError("factory specialists top-k must be positive")
+        if args.factory_deep_top_k <= 0:
+            raise ValueError("factory deep top-k must be positive")
+        if args.factory_diagnostic_test_periods <= 0:
+            raise ValueError("factory diagnostic test periods must be positive")
+
         config = ResearchFactoryConfig(
             horizons=horizons,
             population=ModelPopulationConfig(max_candidates=args.factory_candidates),
@@ -154,6 +188,7 @@ def run_from_args(args: argparse.Namespace) -> int:
             config=config,
             memory_path=args.factory_memory,
         )
+
         specialist_diagnostics = None
         if args.factory_regime_specialists:
             specialist_diagnostics = run_snapshot_regime_specialists(
@@ -162,11 +197,26 @@ def run_from_args(args: argparse.Namespace) -> int:
                 top_k_per_horizon=args.factory_specialists_top_k,
             )
 
+        deep_diagnostics = None
+        if args.factory_deep_diagnostics:
+            deep_diagnostics = run_snapshot_deep_diagnostics(
+                snapshot,
+                report,
+                top_k_per_horizon=args.factory_deep_top_k,
+                train_windows=train_windows,
+                test_periods=args.factory_diagnostic_test_periods,
+            )
+
         if run_dir is not None:
             write_json_record(
                 run_dir / "summary.json",
                 make_run_summary(job_manifest.job_id, report, specialist_diagnostics),
             )
+            if deep_diagnostics is not None:
+                write_json_payload(
+                    run_dir / "deep_diagnostics.json",
+                    compact_deep_diagnostics(deep_diagnostics),
+                )
 
         print("research_factory:")
         print(f"  job_id={job_manifest.job_id}")
@@ -221,6 +271,16 @@ def run_from_args(args: argparse.Namespace) -> int:
                     f"regime_router_score={router.score:.6f} "
                     f"sharpe={router.metrics.get('sharpe', float('nan')):.3f} "
                     f"stress={router.stress_report.score:.3f}"
+                )
+        if deep_diagnostics is not None:
+            print(f"deep_diagnostic_candidates={deep_diagnostics.candidate_count}")
+            for experiment_id, diagnostic in deep_diagnostics.candidates.items():
+                best_policy = diagnostic.policy_arena.best
+                print(
+                    f"deep={experiment_id} h={diagnostic.horizon} model={diagnostic.model_name} "
+                    f"policy={best_policy.policy.top_fraction:.2f}/{best_policy.policy.weighting} "
+                    f"policy_score={best_policy.score:.6f} window_score={diagnostic.window_robustness.score:.3f} "
+                    f"drop_groups={','.join(diagnostic.feature_ablation.recommended_drop_groups) or 'none'}"
                 )
         champion = report.champion_candidate
         if champion is None:
