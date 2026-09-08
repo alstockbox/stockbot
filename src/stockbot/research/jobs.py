@@ -102,15 +102,25 @@ def make_run_summary(
     )
 
 
-def write_json_record(path: str | Path, record: ResearchJobManifest | ResearchRunSummary) -> None:
+def _atomic_write_json(path: str | Path, payload: Any) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_suffix(target.suffix + ".tmp")
-    payload = asdict(record)
-    if "horizons" in payload:
-        payload["horizons"] = list(payload["horizons"])
     temporary.write_text(
         json.dumps(payload, sort_keys=True, indent=2, default=str) + "\n",
         encoding="utf-8",
     )
     temporary.replace(target)
+
+
+def write_json_record(path: str | Path, record: ResearchJobManifest | ResearchRunSummary) -> None:
+    payload = asdict(record)
+    if "horizons" in payload:
+        payload["horizons"] = list(payload["horizons"])
+    _atomic_write_json(path, payload)
+
+
+def write_json_payload(path: str | Path, payload: Any) -> None:
+    """Atomically persist an already JSON-friendly research artifact."""
+
+    _atomic_write_json(path, payload)
