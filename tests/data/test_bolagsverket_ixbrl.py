@@ -1,10 +1,16 @@
+import io
+import zipfile
+
 import pandas as pd
+import pytest
 
 from stockbot.data.providers.bolagsverket_ixbrl import (
     DEFAULT_FACT_SPECS,
+    build_feature_store_from_document_zip,
     build_feature_store_from_xbrl,
     parse_document_list,
 )
+from stockbot.data.providers.http import ProviderError
 
 
 def _document_payload():
@@ -43,6 +49,16 @@ def _xbrl_bytes():
   <se:LangfristigaSkulder contextRef="balans0" unitRef="SEK" decimals="INF">3600000</se:LangfristigaSkulder>
   <se:KortfristigaSkulder contextRef="balans0" unitRef="SEK" decimals="INF">5600000</se:KortfristigaSkulder>
 </xbrli:xbrl>'''
+
+
+def _document_zip(*, duplicate_candidate: bool = False) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("README.txt", "Bolagsverket fixture")
+        archive.writestr("annual-report.xhtml", _xbrl_bytes())
+        if duplicate_candidate:
+            archive.writestr("second-report.xbrl", _xbrl_bytes())
+    return buffer.getvalue()
 
 
 def test_document_list_preserves_registration_time_as_point_in_time_availability():
@@ -98,3 +114,48 @@ def test_xbrl_fundamentals_materialize_with_report_period_and_registration_time(
         assert observation.available_time == "2026-06-30T08:15:00+00:00"
         assert observation.symbol == "AAA"
         assert "document=doc-2025-1" in str(observation.revision_id)
+
+
+def test_document_zip_builds_same_point_in_time_store_without_extracting_to_disk():
+    document = parse_document_list(_document_payload())[0]
+    direct = build_feature_store_from_xbrl(
+        _xbrl_bytes(), document=document, symbol="AAA", fact_specs=DEFAULT_FACT_SPECS
+    )
+    zipped = build_feature_store_from_document_zip(
+        _document_zip(), document=document, symbol="AAA", fact_specs=DEFAULT_FACT_SPECS
+    )
+
+    assert zipped.fingerprint == direct.fingerprint
+
+
+def test_document_zip_rejects_ambiguous_multiple_xbrl_candidates():
+    document = parse_document_list(_document_payload())[0]
+    with pytest.raises(ProviderError, match="multiple XBRL"):
+        build_feature_store_from_document_zip(
+            _document_zip(duplicate_candidate=True),
+            document=document,
+            symbol="AAA",
+            fact_specs=DEFAULT_FACT_SPECS,
+        )
+
+
+def test_registration_time_before_reporting_period_is_rejected():
+    payload = _document_payload()
+    payload["dokument"][0]["REGISTRERINGSTIDPUNKT"] = "2025-12-30T12:00:00Z"
+    with pytest.raises(ProviderError, match="precedes reporting period"):
+        parse_document_list(payload)
+
+
+def test_conflicting_same_period_fact_is_rejected_as_ambiguous():
+    document = parse_document_list(_document_payload())[0]
+    conflicting = _xbrl_bytes().replace(
+        b"</xbrli:xbrl>",
+        b'<se:Nettoomsattning contextRef="period0" unitRef="SEK" decimals="INF">999</se:Nettoomsattning></xbrli:xbrl>',
+    )
+    with pytest.raises(ProviderError, match="ambiguous Bolagsverket fact"):
+        build_feature_store_from_xbrl(
+            conflicting,
+            document=document,
+            symbol="AAA",
+            fact_specs=DEFAULT_FACT_SPECS,
+        )
