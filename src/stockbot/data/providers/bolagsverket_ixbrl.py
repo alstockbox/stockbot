@@ -468,3 +468,51 @@ def build_feature_store_from_document_zip(
         symbol=symbol,
         fact_specs=fact_specs,
     )
+
+
+def build_company_feature_store_from_document_zips(
+    filings: tuple[tuple[BolagsverketDocument, bytes], ...]
+    | list[tuple[BolagsverketDocument, bytes]],
+    *,
+    symbol: str,
+    fact_specs: tuple[BolagsverketFactSpec, ...] | list[BolagsverketFactSpec] = DEFAULT_FACT_SPECS,
+    max_members: int = 64,
+    max_uncompressed_bytes: int = 50_000_000,
+    max_document_bytes: int = 20_000_000,
+) -> PointInTimeFeatureStore:
+    """Combine multiple registered annual-report vintages without rewriting history."""
+
+    entries = tuple(filings)
+    if not entries:
+        raise ProviderError("at least one Bolagsverket filing is required")
+    document_ids = [document.document_id for document, _ in entries]
+    if any(not str(document_id).strip() for document_id in document_ids):
+        raise ProviderError("Bolagsverket filing document IDs cannot be blank")
+    if len(set(document_ids)) != len(document_ids):
+        raise ProviderError("Bolagsverket filing document IDs must be unique")
+
+    observations: list[PointInTimeFeatureObservation] = []
+    for document, archive in sorted(
+        entries,
+        key=lambda item: (item[0].registered_at, item[0].document_id),
+    ):
+        store = build_feature_store_from_document_zip(
+            archive,
+            document=document,
+            symbol=symbol,
+            fact_specs=fact_specs,
+            max_members=max_members,
+            max_uncompressed_bytes=max_uncompressed_bytes,
+            max_document_bytes=max_document_bytes,
+        )
+        observations.extend(store.observations)
+
+    return PointInTimeFeatureStore(
+        observations,
+        PointInTimeFeatureManifest(
+            source=SOURCE_NAME,
+            point_in_time=True,
+            revision_aware=True,
+            available_time_semantics="bolagsverket_registration_time",
+        ),
+    )
