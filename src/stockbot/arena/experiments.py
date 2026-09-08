@@ -38,6 +38,7 @@ class ModelExperimentResult:
     artifact: ExperimentArtifact
     net_returns: pd.Series | None = None
     turnover_series: pd.Series | None = None
+    predictions: pd.Series | None = None
 
 
 def _signal_weights(predictions: pd.Series, top_fraction: float) -> pd.DataFrame:
@@ -138,4 +139,5 @@ def run_model_experiment(
         artifact,
         net_returns=net_returns,
         turnover_series=turnover_series,
+        predictions=oos.predictions.copy(),
     )
