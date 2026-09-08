@@ -18,7 +18,8 @@ class ResearchJobManifest:
     max_workers: int
     memory_path: str | None
     created_at: str
-    schema_version: int = 1
+    quarantine_start: str | None = None
+    schema_version: int = 2
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,7 @@ def make_job_manifest(
     max_candidates: int,
     max_workers: int,
     memory_path: str | None,
+    quarantine_start: str | None = None,
 ) -> ResearchJobManifest:
     payload = {
         "snapshot_id": snapshot_id,
@@ -54,6 +56,7 @@ def make_job_manifest(
         "max_candidates": int(max_candidates),
         "max_workers": int(max_workers),
         "memory_path": memory_path,
+        "quarantine_start": quarantine_start,
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
     job_id = hashlib.sha256(raw).hexdigest()[:24]
@@ -66,6 +69,7 @@ def make_job_manifest(
         max_workers=int(max_workers),
         memory_path=memory_path,
         created_at=datetime.now(timezone.utc).isoformat(),
+        quarantine_start=quarantine_start,
     )
 
 
