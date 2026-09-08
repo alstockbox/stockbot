@@ -12,6 +12,7 @@ from stockbot.data.snapshots import MarketSnapshot
 from stockbot.research.champion import JsonChampionStore
 from stockbot.research.deep_diagnostics import DeepResearchDiagnostics, run_deep_research_diagnostics
 from stockbot.research.factory import FactoryReport, ResearchFactory, ResearchFactoryConfig
+from stockbot.research.liquidity_execution import LiquidityExecutionConfig
 from stockbot.research.memory import JsonlExperimentMemory
 from stockbot.research.specialist_pipeline import RegimeSpecialistDiagnostics, run_regime_specialist_diagnostics
 from stockbot.research.training_pipeline import TrainingRun, run_training_research
@@ -132,8 +133,9 @@ def run_snapshot_deep_diagnostics(
     top_k_per_horizon: int = 1,
     train_windows: tuple[int, ...] = (126, 252, 504),
     test_periods: int = 21,
+    liquidity_config: LiquidityExecutionConfig | None = None,
 ) -> DeepResearchDiagnostics:
-    """Run holdout-safe policy/window/feature diagnostics from one immutable snapshot."""
+    """Run holdout-safe policy/window/feature/capacity diagnostics from one immutable snapshot."""
 
     return run_deep_research_diagnostics(
         prepare_training_bars(snapshot.bars),
@@ -142,4 +144,5 @@ def run_snapshot_deep_diagnostics(
         top_k_per_horizon=top_k_per_horizon,
         train_windows=train_windows,
         test_periods=test_periods,
+        liquidity_config=liquidity_config,
     )
