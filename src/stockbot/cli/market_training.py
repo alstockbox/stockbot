@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 import os
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from stockbot.research.market_training import (
     train_snapshot,
 )
 from stockbot.research.population import ModelPopulationConfig
+from stockbot.research.quarantine import QuarantineConfig, load_quarantine_manifest
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -42,7 +44,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--factory-workers", type=int, default=4, help="Parallel challenger workers used by V2")
     parser.add_argument("--factory-memory", default="research_memory/experiments.jsonl", help="Append-only research-memory JSONL path")
     parser.add_argument("--factory-run-dir", default=None, help="Optional directory for scheduler-friendly job manifest and research artifacts")
-    parser.add_argument("--factory-regime-specialists", action="store_true", help="Train diagnostic bull/bear/chop specialists on the same snapshot")
+    parser.add_argument(
+        "--factory-quarantine-start",
+        default=None,
+        help="Explicit sealed audit boundary; rows at/after this date are excluded from all routine research",
+    )
+    parser.add_argument(
+        "--factory-quarantine-min-development-periods",
+        type=int,
+        default=252,
+        help="Minimum development periods required before the sealed quarantine boundary",
+    )
+    parser.add_argument(
+        "--factory-quarantine-min-periods",
+        type=int,
+        default=42,
+        help="Minimum periods required inside the sealed quarantine set",
+    )
+    parser.add_argument("--factory-regime-specialists", action="store_true", help="Train diagnostic bull/bear/chop specialists on the same development data")
     parser.add_argument("--factory-specialists-top-k", type=int, default=2, help="Generalist candidates per horizon admitted to regime-specialist research")
     parser.add_argument("--factory-deep-diagnostics", action="store_true", help="Run expensive pre-holdout policy/window/feature/liquidity diagnostics")
     parser.add_argument("--factory-deep-top-k", type=int, default=1, help="Generalist candidates per horizon admitted to deep diagnostics")
@@ -152,6 +171,18 @@ def run_from_args(args: argparse.Namespace) -> int:
             raise ValueError("factory diagnostic execution costs cannot be negative")
         if args.factory_diagnostic_adv_window <= 0:
             raise ValueError("factory diagnostic ADV window must be positive")
+        if args.factory_quarantine_min_development_periods <= 0 or args.factory_quarantine_min_periods <= 0:
+            raise ValueError("factory quarantine period requirements must be positive")
+
+        quarantine_config = None
+        quarantine_manifest_path = None
+        if args.factory_quarantine_start:
+            quarantine_config = QuarantineConfig(
+                start=args.factory_quarantine_start,
+                min_development_periods=args.factory_quarantine_min_development_periods,
+                min_quarantine_periods=args.factory_quarantine_min_periods,
+            )
+            quarantine_manifest_path = Path(args.factory_memory).with_suffix(".quarantine.json")
 
         config = ResearchFactoryConfig(
             horizons=horizons,
@@ -165,13 +196,20 @@ def run_from_args(args: argparse.Namespace) -> int:
             max_candidates=args.factory_candidates,
             max_workers=args.factory_workers,
             memory_path=args.factory_memory,
+            quarantine_start=(None if quarantine_config is None else quarantine_config.start),
         )
         run_dir = None
         if args.factory_run_dir:
             run_dir = Path(args.factory_run_dir) / job_manifest.job_id
             write_json_record(run_dir / "job.json", job_manifest)
 
-        report = run_snapshot_factory(snapshot, config=config, memory_path=args.factory_memory)
+        report = run_snapshot_factory(
+            snapshot,
+            config=config,
+            memory_path=args.factory_memory,
+            quarantine_config=quarantine_config,
+            quarantine_manifest_path=quarantine_manifest_path,
+        )
 
         specialist_diagnostics = None
         if args.factory_regime_specialists:
@@ -179,6 +217,8 @@ def run_from_args(args: argparse.Namespace) -> int:
                 snapshot,
                 report,
                 top_k_per_horizon=args.factory_specialists_top_k,
+                quarantine_config=quarantine_config,
+                quarantine_manifest_path=quarantine_manifest_path,
             )
 
         deep_diagnostics = None
@@ -199,12 +239,20 @@ def run_from_args(args: argparse.Namespace) -> int:
                 test_periods=args.factory_diagnostic_test_periods,
                 liquidity_config=liquidity_config,
                 capacity_levels=capital_levels,
+                quarantine_config=quarantine_config,
+                quarantine_manifest_path=quarantine_manifest_path,
             )
+
+        quarantine_manifest = None
+        if quarantine_manifest_path is not None:
+            quarantine_manifest = load_quarantine_manifest(quarantine_manifest_path)
 
         if run_dir is not None:
             write_json_record(run_dir / "summary.json", make_run_summary(job_manifest.job_id, report, specialist_diagnostics))
             if deep_diagnostics is not None:
                 write_json_payload(run_dir / "deep_diagnostics.json", compact_deep_diagnostics(deep_diagnostics))
+            if quarantine_manifest is not None:
+                write_json_payload(run_dir / "quarantine.json", asdict(quarantine_manifest))
 
         print("research_factory:")
         print(f"  job_id={job_manifest.job_id}")
@@ -212,6 +260,13 @@ def run_from_args(args: argparse.Namespace) -> int:
         print(f"  promotion_candidates={report.candidates_passed}")
         print(f"  holdout_evaluated={report.holdout_evaluated}")
         print(f"  holdout_start={report.holdout_start}")
+        if quarantine_manifest is not None:
+            print(f"  quarantine_id={quarantine_manifest.quarantine_id}")
+            print(f"  quarantine_start={quarantine_manifest.start}")
+            print(f"  quarantine_periods={quarantine_manifest.quarantine_periods}")
+            print(f"  quarantine_rows={quarantine_manifest.quarantine_rows}")
+            print(f"  quarantine_manifest={quarantine_manifest_path}")
+
         for index, candidate in enumerate(report.candidates[:20], start=1):
             gate = "pass" if candidate.gate.passed else "reject"
             holdout = "not_tested" if candidate.holdout_report is None else ("pass" if candidate.holdout_report.passed else "reject")
@@ -260,6 +315,8 @@ def run_from_args(args: argparse.Namespace) -> int:
             print("deep_capacity_grid=" + ",".join(f"{capital:.0f}" for capital in capital_levels))
             for experiment_id, diagnostic in deep_diagnostics.candidates.items():
                 best_policy = diagnostic.policy_arena.best
+                bootstrap = diagnostic.bootstrap_uncertainty
+                factor = diagnostic.factor_exposure
                 liquidity = diagnostic.liquidity_execution
                 capacity = diagnostic.capacity_curve
                 max_capacity = "none" if capacity.max_effective_capital is None else f"{capacity.max_effective_capital:.0f}"
@@ -267,11 +324,20 @@ def run_from_args(args: argparse.Namespace) -> int:
                 print(
                     f"deep={experiment_id} h={diagnostic.horizon} model={diagnostic.model_name} "
                     f"policy={best_policy.policy.top_fraction:.2f}/{best_policy.policy.weighting} "
-                    f"policy_score={best_policy.score:.6f} liquidity_score={liquidity.score:.6f} "
-                    f"partial_fill={liquidity.partial_fill_fraction:.3f} tracking={liquidity.average_tracking_error:.3f} "
-                    f"capacity_score={capacity.capacity_score:.3f} max_capacity={max_capacity} first_break={first_break} "
-                    f"window_score={diagnostic.window_robustness.score:.3f} "
+                    f"policy_score={best_policy.score:.6f} confidence={bootstrap.confidence_score:.3f} "
+                    f"p_cagr_pos={bootstrap.probability_positive_cagr:.3f} p_sharpe_pos={bootstrap.probability_positive_sharpe:.3f} "
+                    f"residual_sharpe={factor.residual_metrics.get('sharpe', float('nan')):.3f} "
+                    f"factor_r2={factor.r_squared:.3f} idio={factor.idiosyncratic_score:.3f} "
+                    f"liquidity_score={liquidity.score:.6f} partial_fill={liquidity.partial_fill_fraction:.3f} "
+                    f"tracking={liquidity.average_tracking_error:.3f} capacity_score={capacity.capacity_score:.3f} "
+                    f"max_capacity={max_capacity} first_break={first_break} window_score={diagnostic.window_robustness.score:.3f} "
                     f"drop_groups={','.join(diagnostic.feature_ablation.recommended_drop_groups) or 'none'}"
+                )
+            for horizon, stacking in sorted(deep_diagnostics.stacking_reports.items()):
+                print(
+                    f"stacking=h{horizon} members={len(stacking.member_ids)} model={stacking.meta_model.name} "
+                    f"score={stacking.score:.6f} oos={stacking.oos_coverage:.3f} "
+                    f"sharpe={stacking.metrics.get('sharpe', float('nan')):.3f} stress={stacking.stress_report.score:.3f}"
                 )
 
         champion = report.champion_candidate
