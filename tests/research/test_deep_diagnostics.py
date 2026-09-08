@@ -18,6 +18,7 @@ class _Artifact:
 
 class _Result:
     artifact = _Artifact()
+    predictions = pd.Series([1.0])
 
 
 class _Candidate:
@@ -28,6 +29,7 @@ class _Candidate:
     seed = 7
     factory_score = 1.0
     selection_score = 2.0
+    oos_coverage = 0.8
     gate = _Gate()
     result = _Result()
 
@@ -65,7 +67,12 @@ def test_deep_diagnostics_never_pass_blind_holdout_rows_to_subresearch(monkeypat
 
     def fake_policy(bars, *args, **kwargs):
         _assert_research_only(bars)
-        return SimpleNamespace(best=SimpleNamespace(score=1.0), baseline=None)
+        policy = SimpleNamespace(top_fraction=0.30, weighting="equal")
+        return SimpleNamespace(best=SimpleNamespace(score=1.0, policy=policy), baseline=None)
+
+    def fake_liquidity(bars, *args, **kwargs):
+        _assert_research_only(bars)
+        return SimpleNamespace(score=0.7)
 
     def fake_windows(bars, *args, **kwargs):
         _assert_research_only(bars)
@@ -82,6 +89,7 @@ def test_deep_diagnostics_never_pass_blind_holdout_rows_to_subresearch(monkeypat
         )
 
     monkeypatch.setattr("stockbot.research.deep_diagnostics.evaluate_policy_arena", fake_policy)
+    monkeypatch.setattr("stockbot.research.deep_diagnostics.simulate_liquidity_aware_execution", fake_liquidity)
     monkeypatch.setattr("stockbot.research.deep_diagnostics.evaluate_training_window_robustness", fake_windows)
     monkeypatch.setattr("stockbot.research.deep_diagnostics.evaluate_feature_group_ablation", fake_ablation)
 
@@ -89,4 +97,4 @@ def test_deep_diagnostics_never_pass_blind_holdout_rows_to_subresearch(monkeypat
     diagnostics = run_deep_research_diagnostics(_bars(), metadata, _Report())
 
     assert diagnostics.candidate_count == 1
-    assert len(seen_max_dates) == 3
+    assert len(seen_max_dates) == 4
