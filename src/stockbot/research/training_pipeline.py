@@ -83,6 +83,7 @@ def run_training_research(
     max_workers: int = 1,
     train_periods: int | None = None,
     test_periods: int | None = None,
+    feature_columns: tuple[str, ...] | list[str] | None = None,
 ) -> TrainingRun:
     if horizon <= 0:
         raise ValueError("horizon must be positive")
@@ -94,7 +95,14 @@ def run_training_research(
         raise ValueError("test_periods must be positive")
 
     panel = build_panel(bars)
-    features = add_cross_sectional_features(panel).loc[:, FEATURE_COLUMNS]
+    all_features = add_cross_sectional_features(panel)
+    selected_features = tuple(feature_columns) if feature_columns is not None else FEATURE_COLUMNS
+    if not selected_features:
+        raise ValueError("at least one feature column is required")
+    missing_features = sorted(set(selected_features).difference(all_features.columns))
+    if missing_features:
+        raise ValueError(f"unknown feature columns: {missing_features}")
+    features = all_features.loc[:, selected_features]
     labels = make_panel_labels(panel, horizons=(horizon,))[f"fwd_return_{horizon}"]
     labels.name = f"fwd_return_{horizon}"
 
