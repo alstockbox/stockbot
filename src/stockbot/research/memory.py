@@ -26,6 +26,7 @@ class ExperimentRecord:
     passed_gates: bool
     rejection_reasons: tuple[str, ...]
     created_at: str
+    stress_score: float = 1.0
 
 
 def experiment_id(
@@ -57,6 +58,7 @@ def make_record(
     metrics: dict[str, float],
     passed_gates: bool,
     rejection_reasons: Iterable[str] = (),
+    stress_score: float = 1.0,
 ) -> ExperimentRecord:
     return ExperimentRecord(
         experiment_id=experiment_id(model, dataset_fingerprint=dataset_fingerprint, horizon=horizon),
@@ -73,6 +75,7 @@ def make_record(
         passed_gates=bool(passed_gates),
         rejection_reasons=tuple(str(reason) for reason in rejection_reasons),
         created_at=datetime.now(timezone.utc).isoformat(),
+        stress_score=float(stress_score),
     )
 
 
