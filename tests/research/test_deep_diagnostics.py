@@ -74,6 +74,10 @@ def test_deep_diagnostics_never_pass_blind_holdout_rows_to_subresearch(monkeypat
         _assert_research_only(bars)
         return SimpleNamespace(score=0.7)
 
+    def fake_capacity(bars, *args, **kwargs):
+        _assert_research_only(bars)
+        return SimpleNamespace(capacity_score=0.6)
+
     def fake_windows(bars, *args, **kwargs):
         _assert_research_only(bars)
         return SimpleNamespace(results=(), score=0.8, worst_score=0.5, positive_fraction=1.0)
@@ -90,6 +94,7 @@ def test_deep_diagnostics_never_pass_blind_holdout_rows_to_subresearch(monkeypat
 
     monkeypatch.setattr("stockbot.research.deep_diagnostics.evaluate_policy_arena", fake_policy)
     monkeypatch.setattr("stockbot.research.deep_diagnostics.simulate_liquidity_aware_execution", fake_liquidity)
+    monkeypatch.setattr("stockbot.research.deep_diagnostics.evaluate_capacity_curve", fake_capacity)
     monkeypatch.setattr("stockbot.research.deep_diagnostics.evaluate_training_window_robustness", fake_windows)
     monkeypatch.setattr("stockbot.research.deep_diagnostics.evaluate_feature_group_ablation", fake_ablation)
 
@@ -97,4 +102,4 @@ def test_deep_diagnostics_never_pass_blind_holdout_rows_to_subresearch(monkeypat
     diagnostics = run_deep_research_diagnostics(_bars(), metadata, _Report())
 
     assert diagnostics.candidate_count == 1
-    assert len(seen_max_dates) == 4
+    assert len(seen_max_dates) == 5
