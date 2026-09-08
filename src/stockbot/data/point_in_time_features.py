@@ -59,6 +59,15 @@ def _utc(value: str | pd.Timestamp) -> pd.Timestamp:
     return timestamp.tz_convert("UTC")
 
 
+def _datetime64_ns(values) -> np.ndarray:
+    """Return timezone-normalized nanosecond datetimes independent of pandas storage unit."""
+
+    index = pd.DatetimeIndex(values)
+    if index.tz is not None:
+        index = index.tz_convert("UTC").tz_localize(None)
+    return index.to_numpy(dtype="datetime64[ns]")
+
+
 class PointInTimeFeatureStore:
     """Provider-neutral point-in-time store for non-price research features.
 
@@ -239,15 +248,15 @@ class PointInTimeFeatureStore:
             na_position="first",
             kind="mergesort",
         )
-        best_key: tuple[int, int, tuple[int, str]] | None = None
+        best_key: tuple[pd.Timestamp, pd.Timestamp, tuple[int, str]] | None = None
         best_row = None
         states: list[dict[str, object]] = []
 
         for available_time, group in rows.groupby("available_time", sort=True):
             for row in group.itertuples(index=False):
                 candidate_key = (
-                    int(pd.Timestamp(row.observation_time).value),
-                    int(pd.Timestamp(row.available_time).value),
+                    pd.Timestamp(row.observation_time),
+                    pd.Timestamp(row.available_time),
                     self._revision_key(row.revision_id),
                 )
                 if best_key is None or candidate_key >= best_key:
@@ -286,9 +295,9 @@ class PointInTimeFeatureStore:
         if timeline.empty or len(timestamps) == 0:
             return values, visible
 
-        available_ns = pd.DatetimeIndex(timeline["available_time"]).asi8
-        target_ns = timestamps.asi8
-        positions = np.searchsorted(available_ns, target_ns, side="right") - 1
+        available_values = _datetime64_ns(timeline["available_time"])
+        target_values = _datetime64_ns(timestamps)
+        positions = np.searchsorted(available_values, target_values, side="right") - 1
         visible = positions >= 0
         if not visible.any():
             return values, visible
@@ -297,8 +306,10 @@ class PointInTimeFeatureStore:
         selected_values = timeline["value"].to_numpy(dtype=float)[visible_positions]
         visible_indices = np.flatnonzero(visible)
         if max_age_days is not None:
-            observation_ns = pd.DatetimeIndex(timeline["observation_time"]).asi8[visible_positions]
-            ages_days = (target_ns[visible] - observation_ns) / (86400.0 * 1_000_000_000.0)
+            observation_values = _datetime64_ns(timeline["observation_time"])[visible_positions]
+            ages_days = (
+                target_values[visible] - observation_values
+            ) / np.timedelta64(1, "D")
             fresh = ages_days <= float(max_age_days)
             values[visible_indices[fresh]] = selected_values[fresh]
             return values, visible
