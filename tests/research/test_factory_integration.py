@@ -70,6 +70,7 @@ def test_research_factory_runs_population_stress_holdout_and_champion(tmp_path):
         min_regime_score=0.0,
         min_regime_coverage=0.0,
         reject_drifted_candidates=False,
+        require_paper_readiness=False,
     )
     memory = JsonlExperimentMemory(tmp_path / "experiments.jsonl")
     champion_store = JsonChampionStore(tmp_path / "champion.json")
@@ -88,6 +89,7 @@ def test_research_factory_runs_population_stress_holdout_and_champion(tmp_path):
     assert all(candidate.regime_report is not None for candidate in report.candidates)
     assert all(candidate.discovery is not None for candidate in report.candidates)
     assert all(candidate.drift_report is not None for candidate in report.candidates)
+    assert all(candidate.paper_readiness is not None for candidate in report.candidates)
     assert report.holdout_start is not None
     assert report.holdout_evaluated == 2
     assert report.candidates_passed >= 1
