@@ -17,6 +17,7 @@ class ResearchGateCriteria:
 
     min_oos_coverage: float = 0.40
     min_robustness: float = 0.55
+    min_stress_score: float = 0.45
     max_drawdown: float = 0.25
     max_cvar_95: float = 0.04
     max_turnover: float = 80.0
@@ -37,6 +38,7 @@ def evaluate_research_gate(
     metadata: DatasetMetadata,
     *,
     factory_score: float,
+    stress_score: float = 1.0,
     criteria: ResearchGateCriteria | None = None,
 ) -> GateDecision:
     c = criteria or ResearchGateCriteria()
@@ -48,6 +50,8 @@ def evaluate_research_gate(
         reasons.append("insufficient_oos_coverage")
     if float(result.robustness) < c.min_robustness:
         reasons.append("insufficient_robustness")
+    if float(stress_score) < c.min_stress_score:
+        reasons.append("stress_failure")
     if float(result.metrics.get("max_drawdown", 1.0)) > c.max_drawdown:
         reasons.append("drawdown_limit")
     if float(result.metrics.get("cvar_95", 1.0)) > c.max_cvar_95:
