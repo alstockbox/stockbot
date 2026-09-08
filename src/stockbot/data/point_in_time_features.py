@@ -210,7 +210,7 @@ class PointInTimeFeatureStore:
     def _state_timeline(self, feature_name: str, symbol: str | None) -> pd.DataFrame:
         """Return only the selected state visible after each source publication time.
 
-        The legacy materializer selected the lexicographically latest
+        The reference materializer selects the lexicographically latest
         `(observation_time, available_time, revision_id)` among observations known at
         each as-of timestamp. Building that state once per feature/scope makes repeated
         historical materialization a binary-search problem instead of repeated DataFrame
@@ -273,32 +273,38 @@ class PointInTimeFeatureStore:
         *,
         max_age_days: int | None,
     ) -> tuple[np.ndarray, np.ndarray]:
+        """Return values plus whether a scope has any observation visible as-of each row.
+
+        `visible` remains true when the selected value is stale under `max_age_days`.
+        This distinction is required because a stale symbol-specific observation still
+        overrides the global scope and therefore must produce NaN rather than fall back
+        to a global value.
+        """
+
         values = np.full(len(timestamps), np.nan, dtype=float)
-        known = np.zeros(len(timestamps), dtype=bool)
+        visible = np.zeros(len(timestamps), dtype=bool)
         if timeline.empty or len(timestamps) == 0:
-            return values, known
+            return values, visible
 
         available_ns = pd.DatetimeIndex(timeline["available_time"]).asi8
         target_ns = timestamps.asi8
         positions = np.searchsorted(available_ns, target_ns, side="right") - 1
-        known = positions >= 0
-        if not known.any():
-            return values, known
+        visible = positions >= 0
+        if not visible.any():
+            return values, visible
 
-        known_positions = positions[known]
-        selected_values = timeline["value"].to_numpy(dtype=float)[known_positions]
+        visible_positions = positions[visible]
+        selected_values = timeline["value"].to_numpy(dtype=float)[visible_positions]
+        visible_indices = np.flatnonzero(visible)
         if max_age_days is not None:
-            observation_ns = pd.DatetimeIndex(timeline["observation_time"]).asi8[known_positions]
-            ages_days = (target_ns[known] - observation_ns) / (86400.0 * 1_000_000_000.0)
+            observation_ns = pd.DatetimeIndex(timeline["observation_time"]).asi8[visible_positions]
+            ages_days = (target_ns[visible] - observation_ns) / (86400.0 * 1_000_000_000.0)
             fresh = ages_days <= float(max_age_days)
-            known_indices = np.flatnonzero(known)
-            values[known_indices[fresh]] = selected_values[fresh]
-            final_known = np.zeros(len(timestamps), dtype=bool)
-            final_known[known_indices[fresh]] = True
-            return values, final_known
+            values[visible_indices[fresh]] = selected_values[fresh]
+            return values, visible
 
-        values[known] = selected_values
-        return values, known
+        values[visible] = selected_values
+        return values, visible
 
     def _value_asof(
         self,
@@ -399,14 +405,14 @@ class PointInTimeFeatureStore:
                 if not row_mask.any():
                     continue
                 symbol_timestamps = timestamps[row_mask]
-                specific_values, specific_known = self._timeline_values(
+                specific_values, specific_visible = self._timeline_values(
                     self._state_timeline(feature_name, symbol),
                     symbol_timestamps,
                     max_age_days=max_age_days,
                 )
-                if specific_known.any():
+                if specific_visible.any():
                     target_rows = np.flatnonzero(row_mask)
-                    values[target_rows[specific_known]] = specific_values[specific_known]
+                    values[target_rows[specific_visible]] = specific_values[specific_visible]
             materialized[feature_name] = values
 
         base = pd.DataFrame(materialized, index=normalized, dtype=float)
