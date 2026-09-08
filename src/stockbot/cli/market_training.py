@@ -10,6 +10,7 @@ from stockbot.data.providers.tiingo import TiingoProvider
 from stockbot.data.providers.yahoo_bootstrap import YahooBootstrapProvider
 from stockbot.data.snapshots import SnapshotStore
 from stockbot.research.factory import ResearchFactoryConfig
+from stockbot.research.jobs import make_job_manifest, make_run_summary, write_json_record
 from stockbot.research.market_training import run_snapshot_factory, train_snapshot
 from stockbot.research.population import ModelPopulationConfig
 
@@ -50,6 +51,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--factory-memory",
         default="research_memory/experiments.jsonl",
         help="Append-only research-memory JSONL path",
+    )
+    parser.add_argument(
+        "--factory-run-dir",
+        default=None,
+        help="Optional directory for scheduler-friendly job manifest and run summary JSON",
     )
     return parser
 
@@ -107,17 +113,34 @@ def run_from_args(args: argparse.Namespace) -> int:
         print(f"champion_candidate={champion}")
 
     if args.factory:
+        horizons = _parse_horizons(args.factory_horizons)
         config = ResearchFactoryConfig(
-            horizons=_parse_horizons(args.factory_horizons),
+            horizons=horizons,
             population=ModelPopulationConfig(max_candidates=args.factory_candidates),
             max_workers=args.factory_workers,
         )
+        job_manifest = make_job_manifest(
+            snapshot_id=snapshot.snapshot_id,
+            dataset_fingerprint=manifest.dataset_fingerprint,
+            horizons=horizons,
+            max_candidates=args.factory_candidates,
+            max_workers=args.factory_workers,
+            memory_path=args.factory_memory,
+        )
+        if args.factory_run_dir:
+            run_dir = Path(args.factory_run_dir) / job_manifest.job_id
+            write_json_record(run_dir / "job.json", job_manifest)
+
         report = run_snapshot_factory(
             snapshot,
             config=config,
             memory_path=args.factory_memory,
         )
+        if args.factory_run_dir:
+            write_json_record(run_dir / "summary.json", make_run_summary(job_manifest.job_id, report))
+
         print("research_factory:")
+        print(f"  job_id={job_manifest.job_id}")
         print(f"  experiments_run={report.experiments_run}")
         print(f"  promotion_candidates={report.candidates_passed}")
         print(f"  holdout_evaluated={report.holdout_evaluated}")
@@ -129,11 +152,26 @@ def run_from_args(args: argparse.Namespace) -> int:
                 if candidate.holdout_report is None
                 else ("pass" if candidate.holdout_report.passed else "reject")
             )
+            q_value = float("nan") if candidate.discovery is None else candidate.discovery.q_value
+            regime_score = float("nan") if candidate.regime_report is None else candidate.regime_report.score
+            drift = "unknown" if candidate.drift_report is None else ("degraded" if candidate.drift_report.degraded else "stable")
             print(
                 f"  {index}. h={candidate.horizon} {candidate.model_name} "
-                f"research={candidate.factory_score:.6f} promotion={candidate.promotion_score:.6f} "
-                f"oos={candidate.oos_coverage:.3f} stress={candidate.stress_score:.3f} "
-                f"gate={gate} holdout={holdout}"
+                f"research={candidate.factory_score:.6f} selection={candidate.selection_score:.6f} "
+                f"promotion={candidate.promotion_score:.6f} oos={candidate.oos_coverage:.3f} "
+                f"stress={candidate.stress_score:.3f} regime={regime_score:.3f} "
+                f"q={q_value:.4f} drift={drift} gate={gate} holdout={holdout}"
+            )
+        if report.ensemble_report is not None:
+            ensemble = report.ensemble_report
+            print(
+                f"horizon_ensemble_score={ensemble.score:.6f} "
+                f"sharpe={ensemble.metrics.get('sharpe', float('nan')):.3f} "
+                f"stress={ensemble.stress_report.score:.3f}"
+            )
+            print(
+                "horizon_ensemble_weights="
+                + ",".join(f"{key}:{weight:.4f}" for key, weight in ensemble.member_weights.items())
             )
         champion = report.champion_candidate
         if champion is None:
