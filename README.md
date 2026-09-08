@@ -124,4 +124,61 @@ A BOOTSTRAP snapshot can be used to exercise and rank the research machinery, bu
 
 V2 is intentionally **not** trained against a fixed weekly-return target. Searching hundreds of candidates against an arbitrary return target is a direct route to curve fitting and hidden leverage. The factory instead maximizes robust out-of-sample edge after costs, then subjects the strongest candidates to stress and blind-holdout tests before promotion.
 
-No backtest, model score or champion status guarantees future returns.
+## V2.1: self-improving research farm
+
+V2.1 adds another evidence layer between raw model search and extended paper trading. The default selection funnel is now:
+
+`broad/evolutionary population -> purged OOS -> cost-aware metrics -> adversarial stress -> regime evaluation -> FDR control -> drift check -> blind holdout -> paper readiness -> horizon champions -> meta-ensemble`
+
+### Statistical false-discovery control
+
+When hundreds of candidates are tested, some will look good by luck. V2.1 computes a one-sided OOS mean-return test for each candidate and applies Benjamini-Hochberg false-discovery-rate control across the whole experiment population. A candidate can therefore have an attractive backtest score and still be rejected before it consumes blind-holdout budget.
+
+### Regime robustness and specialists
+
+Every generalist is evaluated separately across causal `bull_trend`, `bear_stress` and `neutral_chop` market regimes. V2.1 can also train dedicated purged-walk-forward specialists that only learn and predict in their intended regime, then evaluate a causal research-only regime router across their OOS return streams.
+
+Run the optional specialist research after the main factory:
+
+```bash
+python scripts/run_market_training.py \
+  --provider tiingo \
+  --symbols AAPL,MSFT,NVDA,AMZN,META,GOOGL,SPY,QQQ \
+  --start 2014-01-01 \
+  --end 2026-09-01 \
+  --snapshot-root snapshots \
+  --factory \
+  --factory-regime-specialists \
+  --factory-specialists-top-k 2
+```
+
+Regime specialists and the router remain diagnostics. They do not bypass the global blind holdout or create a broker execution path.
+
+### Evolutionary challenger generation
+
+Research memory is now used as an input to future snapshot runs. A bounded portion of the next population is created by mutating parameters around historically strong research-gate winners, while the remaining population continues broad model-family exploration. This gives the search loop an explore/exploit mechanism instead of restarting from exactly the same static grid every run.
+
+### Drift and paper-readiness
+
+Recent OOS behavior is compared with each model's earlier OOS history using mean-return shift, volatility expansion, Sharpe degradation and drawdown degradation. A final paper-readiness report combines OOS coverage, robustness, stress survival, regime robustness, FDR confidence, drift stability and blind-holdout evidence. By default, a model is not eligible for champion promotion unless the evidence chain is complete.
+
+### Scheduler-friendly 24/7 research jobs
+
+Factory runs can emit deterministic job manifests and machine-readable summaries:
+
+```bash
+python scripts/run_market_training.py \
+  --provider tiingo \
+  --symbols AAPL,MSFT,NVDA,AMZN,META,GOOGL,SPY,QQQ \
+  --start 2014-01-01 \
+  --end 2026-09-01 \
+  --snapshot-root snapshots \
+  --factory \
+  --factory-memory research_memory/experiments.jsonl \
+  --factory-run-dir research_runs \
+  --factory-regime-specialists
+```
+
+Each run can write `job.json` before research begins and `summary.json` after it completes. The summary includes experiment counts, promotion status, active champion, horizon-ensemble score and optional regime-specialist/router scores. This is intended as the persistence contract for a future scheduler/queue rather than as a live execution service.
+
+No backtest, model score, statistical test, paper-readiness status or champion status guarantees future returns.
