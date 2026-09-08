@@ -68,7 +68,15 @@ def test_deep_diagnostics_never_pass_blind_holdout_rows_to_subresearch(monkeypat
     def fake_policy(bars, *args, **kwargs):
         _assert_research_only(bars)
         policy = SimpleNamespace(top_fraction=0.30, weighting="equal")
-        return SimpleNamespace(best=SimpleNamespace(score=1.0, policy=policy), baseline=None)
+        best = SimpleNamespace(
+            score=1.0,
+            policy=policy,
+            net_returns=pd.Series([0.001] * 40, dtype=float),
+        )
+        return SimpleNamespace(best=best, baseline=None)
+
+    def fake_bootstrap(*args, **kwargs):
+        return SimpleNamespace(confidence_score=0.9)
 
     def fake_liquidity(bars, *args, **kwargs):
         _assert_research_only(bars)
@@ -93,6 +101,7 @@ def test_deep_diagnostics_never_pass_blind_holdout_rows_to_subresearch(monkeypat
         )
 
     monkeypatch.setattr("stockbot.research.deep_diagnostics.evaluate_policy_arena", fake_policy)
+    monkeypatch.setattr("stockbot.research.deep_diagnostics.evaluate_block_bootstrap_uncertainty", fake_bootstrap)
     monkeypatch.setattr("stockbot.research.deep_diagnostics.simulate_liquidity_aware_execution", fake_liquidity)
     monkeypatch.setattr("stockbot.research.deep_diagnostics.evaluate_capacity_curve", fake_capacity)
     monkeypatch.setattr("stockbot.research.deep_diagnostics.evaluate_training_window_robustness", fake_windows)
