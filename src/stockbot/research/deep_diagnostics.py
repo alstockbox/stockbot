@@ -8,6 +8,7 @@ import pandas as pd
 from stockbot.data.schemas import DatasetMetadata
 from stockbot.ml.models import ModelConfig
 from stockbot.research.feature_ablation import FeatureAblationReport, evaluate_feature_group_ablation
+from stockbot.research.liquidity_execution import LiquidityExecutionConfig, LiquidityExecutionReport, simulate_liquidity_aware_execution
 from stockbot.research.policy_search import PolicyArenaReport, evaluate_policy_arena
 from stockbot.research.window_robustness import WindowRobustnessReport, evaluate_training_window_robustness
 
@@ -18,6 +19,7 @@ class CandidateDeepDiagnostics:
     horizon: int
     model_name: str
     policy_arena: PolicyArenaReport
+    liquidity_execution: LiquidityExecutionReport
     window_robustness: WindowRobustnessReport
     feature_ablation: FeatureAblationReport
 
@@ -72,6 +74,7 @@ def run_deep_research_diagnostics(
     top_k_per_horizon: int = 1,
     train_windows: tuple[int, ...] = (126, 252, 504),
     test_periods: int = 21,
+    liquidity_config: LiquidityExecutionConfig | None = None,
 ) -> DeepResearchDiagnostics:
     """Run expensive diagnostics only on top generalists and only before blind holdout."""
 
@@ -91,6 +94,17 @@ def run_deep_research_diagnostics(
         policy = evaluate_policy_arena(
             research_bars,
             candidate.result,
+        )
+        best_policy = policy.best.policy
+        if candidate.result.predictions is None:
+            raise ValueError("deep diagnostics require retained OOS predictions")
+        liquidity = simulate_liquidity_aware_execution(
+            research_bars,
+            candidate.result.predictions,
+            top_fraction=best_policy.top_fraction,
+            weighting=best_policy.weighting,
+            config=liquidity_config,
+            oos_coverage=candidate.oos_coverage,
         )
         windows = evaluate_training_window_robustness(
             research_bars,
@@ -113,6 +127,7 @@ def run_deep_research_diagnostics(
             horizon=int(candidate.horizon),
             model_name=candidate.model_name,
             policy_arena=policy,
+            liquidity_execution=liquidity,
             window_robustness=windows,
             feature_ablation=ablation,
         )
@@ -138,6 +153,15 @@ def compact_deep_diagnostics(diagnostics: DeepResearchDiagnostics) -> dict[str, 
                 "weighting": item.policy_arena.best.policy.weighting,
                 "score": item.policy_arena.best.score,
                 "baseline_score": baseline_score,
+            },
+            "liquidity_execution": {
+                "score": item.liquidity_execution.score,
+                "partial_fill_fraction": item.liquidity_execution.partial_fill_fraction,
+                "average_participation": item.liquidity_execution.average_participation,
+                "max_participation": item.liquidity_execution.max_participation,
+                "average_tracking_error": item.liquidity_execution.average_tracking_error,
+                "capacity_utilization": item.liquidity_execution.capacity_utilization,
+                "cost_ratio": item.liquidity_execution.metrics.get("cost_ratio", 0.0),
             },
             "window_robustness": {
                 "score": item.window_robustness.score,
