@@ -1,0 +1,108 @@
+import pandas as pd
+import pytest
+
+from stockbot.data.providers.http import ProviderError
+from stockbot.data.providers.riksbank_macro import (
+    BASE_URL,
+    RiksbankMonetaryPolicyProvider,
+    RiksbankSeries,
+)
+
+
+class _FakeTransport:
+    def __init__(self, payload=None):
+        self.payload = payload
+        self.calls = []
+
+    def get_json(self, url, headers=None):
+        self.calls.append((url, headers or {}))
+        return self.payload
+
+
+def _payload():
+    return {
+        "cutoffDate": "2025-02-12T08:00:00+01:00",
+        "policyRoundName": "2025:1",
+        "data": [
+            {"date": "2024-10-01", "value": 2.75},
+            {"date": "2025-01-01", "value": 2.50},
+            # Future target relative to the vintage cutoff: V1 must not collapse
+            # this forecast into the realised policy_rate feature.
+            {"date": "2025-04-01", "value": 2.25},
+        ],
+    }
+
+
+def test_fetch_series_payload_uses_documented_forecast_endpoint_and_round_query():
+    transport = _FakeTransport({"data": []})
+    provider = RiksbankMonetaryPolicyProvider(transport=transport)
+    provider.fetch_series_payload("SEQRATENAYNA", policy_round="2025:1")
+
+    assert len(transport.calls) == 1
+    url, headers = transport.calls[0]
+    assert url.startswith(BASE_URL + "?")
+    assert "series=SEQRATENAYNA" in url
+    assert "policy_round_name=2025%3A1" in url
+    assert headers["Accept"] == "application/json"
+
+
+def test_realised_rows_use_vintage_cutoff_as_available_time_and_skip_future_targets():
+    provider = RiksbankMonetaryPolicyProvider(transport=_FakeTransport())
+    observations = provider.observations_from_payload(
+        _payload(),
+        feature_name="policy_rate",
+        series_id="SEQRATENAYNA",
+    )
+
+    assert len(observations) == 2
+    assert [row.value for row in observations] == [2.75, 2.50]
+    assert all(row.feature_name == "policy_rate" for row in observations)
+    assert all(row.symbol is None for row in observations)
+    assert all(row.available_time == "2025-02-12T07:00:00+00:00" for row in observations)
+    assert all("series=SEQRATENAYNA" in (row.revision_id or "") for row in observations)
+    assert all("round=2025:1" in (row.revision_id or "") for row in observations)
+
+
+def test_missing_cutoff_or_publication_time_fails_closed():
+    provider = RiksbankMonetaryPolicyProvider(transport=_FakeTransport())
+    payload = {"data": [{"date": "2025-01-01", "value": 2.5}]}
+
+    with pytest.raises(ProviderError, match="cutoff/publication time"):
+        provider.observations_from_payload(
+            payload,
+            feature_name="policy_rate",
+            series_id="SEQRATENAYNA",
+        )
+
+
+def test_future_forecast_requires_explicit_horizon_schema_when_not_filtered():
+    provider = RiksbankMonetaryPolicyProvider(transport=_FakeTransport())
+
+    with pytest.raises(ProviderError, match="horizon-aware"):
+        provider.observations_from_payload(
+            _payload(),
+            feature_name="policy_rate",
+            series_id="SEQRATENAYNA",
+            realised_only=False,
+        )
+
+
+def test_build_store_is_point_in_time_revision_aware_and_materializes_only_after_cutoff():
+    transport = _FakeTransport(_payload())
+    provider = RiksbankMonetaryPolicyProvider(transport=transport)
+    store = provider.build_store((RiksbankSeries("policy_rate", "SEQRATENAYNA"),), policy_round="2025:1")
+
+    assert store.manifest.point_in_time is True
+    assert store.manifest.revision_aware is True
+    assert store.feature_names == ("policy_rate",)
+
+    before = pd.MultiIndex.from_tuples(
+        [(pd.Timestamp("2025-02-11", tz="UTC"), "AAA")],
+        names=["timestamp", "symbol"],
+    )
+    after = pd.MultiIndex.from_tuples(
+        [(pd.Timestamp("2025-02-13", tz="UTC"), "AAA")],
+        names=["timestamp", "symbol"],
+    )
+    assert pd.isna(store.materialize(before).iloc[0, 0])
+    assert store.materialize(after).iloc[0, 0] == pytest.approx(2.50)
