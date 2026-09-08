@@ -65,6 +65,10 @@ def test_deep_diagnostics_never_pass_blind_holdout_rows_to_subresearch(monkeypat
         seen_max_dates.append(max_date)
         assert max_date < _Report.holdout_start
 
+    def fake_factors(bars, *args, **kwargs):
+        _assert_research_only(bars)
+        return pd.DataFrame({"market": [0.0] * 40})
+
     def fake_policy(bars, *args, **kwargs):
         _assert_research_only(bars)
         policy = SimpleNamespace(top_fraction=0.30, weighting="equal")
@@ -77,6 +81,9 @@ def test_deep_diagnostics_never_pass_blind_holdout_rows_to_subresearch(monkeypat
 
     def fake_bootstrap(*args, **kwargs):
         return SimpleNamespace(confidence_score=0.9)
+
+    def fake_factor_exposure(*args, **kwargs):
+        return SimpleNamespace(idiosyncratic_score=0.8)
 
     def fake_liquidity(bars, *args, **kwargs):
         _assert_research_only(bars)
@@ -100,8 +107,10 @@ def test_deep_diagnostics_never_pass_blind_holdout_rows_to_subresearch(monkeypat
             recommended_drop_groups=(),
         )
 
+    monkeypatch.setattr("stockbot.research.deep_diagnostics.build_internal_factor_returns", fake_factors)
     monkeypatch.setattr("stockbot.research.deep_diagnostics.evaluate_policy_arena", fake_policy)
     monkeypatch.setattr("stockbot.research.deep_diagnostics.evaluate_block_bootstrap_uncertainty", fake_bootstrap)
+    monkeypatch.setattr("stockbot.research.deep_diagnostics.evaluate_factor_exposure", fake_factor_exposure)
     monkeypatch.setattr("stockbot.research.deep_diagnostics.simulate_liquidity_aware_execution", fake_liquidity)
     monkeypatch.setattr("stockbot.research.deep_diagnostics.evaluate_capacity_curve", fake_capacity)
     monkeypatch.setattr("stockbot.research.deep_diagnostics.evaluate_training_window_robustness", fake_windows)
@@ -111,4 +120,4 @@ def test_deep_diagnostics_never_pass_blind_holdout_rows_to_subresearch(monkeypat
     diagnostics = run_deep_research_diagnostics(_bars(), metadata, _Report())
 
     assert diagnostics.candidate_count == 1
-    assert len(seen_max_dates) == 5
+    assert len(seen_max_dates) == 6
