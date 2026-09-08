@@ -9,11 +9,15 @@ from stockbot.arena.experiments import ModelExperimentResult
 from stockbot.data.schemas import DataGrade, DatasetMetadata
 from stockbot.ml.models import ModelConfig
 from stockbot.research.champion import ChampionState, JsonChampionStore, make_champion_state
+from stockbot.research.drift import DriftReport, evaluate_return_drift
+from stockbot.research.ensemble import EnsembleReport, build_horizon_ensemble
 from stockbot.research.gates import GateDecision, ResearchGateCriteria, evaluate_research_gate
 from stockbot.research.holdout import HoldoutConfig, HoldoutReport, evaluate_blind_holdout, split_research_holdout
 from stockbot.research.memory import JsonlExperimentMemory, experiment_id, make_record
+from stockbot.research.multiple_testing import DiscoveryResult, evaluate_discoveries
 from stockbot.research.objective import ObjectiveWeights, risk_adjusted_objective
 from stockbot.research.population import ModelPopulationConfig, generate_model_population
+from stockbot.research.regime_eval import RegimePerformanceReport, build_market_regime_series, evaluate_regime_performance
 from stockbot.research.stress import StressReport, evaluate_stress_suite
 from stockbot.research.training_pipeline import run_training_research
 
@@ -31,6 +35,12 @@ class ResearchFactoryConfig:
     require_holdout: bool = True
     promotion_margin: float = 0.02
     max_workers: int = 4
+    max_fdr_q_value: float = 0.20
+    require_statistical_discovery: bool = True
+    min_regime_score: float = 0.20
+    min_regime_coverage: float = 1.0 / 3.0
+    reject_drifted_candidates: bool = True
+    ensemble_temperature: float = 0.75
 
     def __post_init__(self) -> None:
         if not self.horizons or any(horizon <= 0 for horizon in self.horizons):
@@ -43,6 +53,14 @@ class ResearchFactoryConfig:
             raise ValueError("max_workers must be positive")
         if self.holdout_top_k <= 0:
             raise ValueError("holdout_top_k must be positive")
+        if not 0.0 < self.max_fdr_q_value < 1.0:
+            raise ValueError("max_fdr_q_value must be in (0,1)")
+        if not 0.0 <= self.min_regime_score <= 1.0:
+            raise ValueError("min_regime_score must be in [0,1]")
+        if not 0.0 <= self.min_regime_coverage <= 1.0:
+            raise ValueError("min_regime_coverage must be in [0,1]")
+        if self.ensemble_temperature <= 0.0:
+            raise ValueError("ensemble_temperature must be positive")
 
 
 @dataclass(frozen=True)
@@ -53,6 +71,7 @@ class FactoryCandidate:
     model_params: dict[str, Any]
     seed: int
     factory_score: float
+    selection_score: float
     promotion_score: float
     base_score: float
     metrics: dict[str, float]
@@ -60,6 +79,9 @@ class FactoryCandidate:
     oos_coverage: float
     stress_score: float
     stress_report: StressReport | None
+    regime_report: RegimePerformanceReport | None
+    discovery: DiscoveryResult | None
+    drift_report: DriftReport | None
     holdout_report: HoldoutReport | None
     gate: GateDecision
     result: ModelExperimentResult
@@ -72,6 +94,7 @@ class FactoryReport:
     active_champion: ChampionState | None
     promotion_occurred: bool
     horizon_champions: dict[int, FactoryCandidate]
+    ensemble_report: EnsembleReport | None
     data_grade: DataGrade
     experiments_run: int
     candidates_passed: int
@@ -80,14 +103,13 @@ class FactoryReport:
 
 
 class ResearchFactory:
-    """Run broad, multi-horizon ML research and promote only robust OOS candidates.
+    """Autonomous multi-horizon research factory with layered anti-overfit controls.
 
-    Hyperparameters are selected only on the research partition. The final time block
-    is reserved before the search starts and is exposed only to the strongest gated
-    candidates. Promotion therefore requires both repeated purged walk-forward edge
-    and survival on an untouched blind holdout. Persistent champion state is kept
-    separate from experiment memory so research-gate winners cannot masquerade as
-    deployed champions when they fail the final holdout.
+    Hyperparameters are selected only on the research partition. Candidates are then
+    filtered by transaction-cost-aware OOS performance, adversarial stress, market
+    regime robustness, false-discovery control and recent-return drift before the
+    strongest models may touch the blind final holdout. Horizon winners are also
+    blended into a diversified research ensemble for meta-level evaluation.
     """
 
     def __init__(
@@ -156,6 +178,7 @@ class ResearchFactory:
             model_params=dict(model.params),
             seed=int(model.seed),
             factory_score=float(factory_score),
+            selection_score=float(factory_score),
             promotion_score=float(factory_score),
             base_score=float(result.score),
             metrics={key: float(value) for key, value in result.metrics.items()},
@@ -163,6 +186,9 @@ class ResearchFactory:
             oos_coverage=float(result.oos_coverage),
             stress_score=float(stress_score),
             stress_report=stress_report,
+            regime_report=None,
+            discovery=None,
+            drift_report=None,
             holdout_report=None,
             gate=gate,
             result=result,
@@ -186,6 +212,67 @@ class ResearchFactory:
             )
         return candidate
 
+    def _enrich_candidates(
+        self,
+        candidates: list[FactoryCandidate],
+        research_bars: pd.DataFrame,
+    ) -> list[FactoryCandidate]:
+        regime_series = build_market_regime_series(research_bars)
+        returns_by_id = {
+            candidate.experiment_id: candidate.result.net_returns
+            for candidate in candidates
+            if candidate.result.net_returns is not None and len(candidate.result.net_returns) > 0
+        }
+        discoveries = evaluate_discoveries(
+            returns_by_id,
+            max_q_value=self.config.max_fdr_q_value,
+        ) if returns_by_id else {}
+
+        enriched: list[FactoryCandidate] = []
+        for candidate in candidates:
+            returns = candidate.result.net_returns
+            if returns is None or len(returns) == 0:
+                enriched.append(candidate)
+                continue
+            regime_report = evaluate_regime_performance(returns, regime_series)
+            drift_report = evaluate_return_drift(returns)
+            discovery = discoveries.get(candidate.experiment_id)
+            discovery_confidence = discovery.confidence if discovery is not None else 0.0
+            selection_score = (
+                candidate.factory_score
+                + 1.00 * regime_report.score
+                + 0.75 * discovery_confidence
+                + 0.50 * drift_report.score
+            )
+            enriched.append(
+                replace(
+                    candidate,
+                    selection_score=float(selection_score),
+                    promotion_score=float(selection_score),
+                    regime_report=regime_report,
+                    discovery=discovery,
+                    drift_report=drift_report,
+                )
+            )
+        return enriched
+
+    def _pre_holdout_eligible(self, candidate: FactoryCandidate) -> bool:
+        if not candidate.gate.passed:
+            return False
+        if candidate.regime_report is None:
+            return False
+        if candidate.regime_report.score < self.config.min_regime_score:
+            return False
+        if candidate.regime_report.coverage < self.config.min_regime_coverage:
+            return False
+        if self.config.require_statistical_discovery:
+            if candidate.discovery is None or not candidate.discovery.significant:
+                return False
+        if self.config.reject_drifted_candidates:
+            if candidate.drift_report is None or candidate.drift_report.degraded:
+                return False
+        return True
+
     def _apply_blind_holdout(
         self,
         bars: pd.DataFrame,
@@ -198,8 +285,9 @@ class ResearchFactory:
             horizon_passed = [
                 candidate
                 for candidate in candidates
-                if candidate.gate.passed and candidate.horizon == horizon
+                if self._pre_holdout_eligible(candidate) and candidate.horizon == horizon
             ]
+            horizon_passed.sort(key=lambda row: row.selection_score, reverse=True)
             selected.extend(horizon_passed[: self.config.holdout_top_k])
 
         replacements: dict[str, FactoryCandidate] = {}
@@ -217,7 +305,7 @@ class ResearchFactory:
                 config=self.config.holdout,
                 objective=self.config.objective,
             )
-            promotion_score = 0.70 * candidate.factory_score + 0.30 * report.score
+            promotion_score = 0.70 * candidate.selection_score + 0.30 * report.score
             replacements[candidate.experiment_id] = replace(
                 candidate,
                 holdout_report=report,
@@ -246,6 +334,26 @@ class ResearchFactory:
             holdout_score=holdout_score,
         )
 
+    def _build_ensemble(
+        self,
+        horizon_champions: dict[int, FactoryCandidate],
+        research_bars: pd.DataFrame,
+    ) -> EnsembleReport | None:
+        usable = {
+            candidate.experiment_id: candidate
+            for candidate in horizon_champions.values()
+            if candidate.result.net_returns is not None and len(candidate.result.net_returns) > 0
+        }
+        if not usable:
+            return None
+        regime_series = build_market_regime_series(research_bars)
+        return build_horizon_ensemble(
+            {item: candidate.result.net_returns for item, candidate in usable.items()},
+            {item: candidate.promotion_score for item, candidate in usable.items()},
+            regime_series=regime_series,
+            temperature=self.config.ensemble_temperature,
+        )
+
     def run(self, bars: pd.DataFrame, metadata: DatasetMetadata) -> FactoryReport:
         incumbent = self.champion_store.load() if self.champion_store is not None else None
 
@@ -270,7 +378,9 @@ class ResearchFactory:
                 for result in training_run.leaderboard
             )
 
-        candidates.sort(key=lambda row: row.factory_score, reverse=True)
+        candidates = self._enrich_candidates(candidates, research_bars)
+        candidates.sort(key=lambda row: row.selection_score, reverse=True)
+
         holdout_evaluated = 0
         if holdout_start is not None:
             candidates, holdout_evaluated = self._apply_blind_holdout(
@@ -280,12 +390,12 @@ class ResearchFactory:
             )
 
         if holdout_start is None:
-            promotion_pool = [candidate for candidate in candidates if candidate.gate.passed]
+            promotion_pool = [candidate for candidate in candidates if self._pre_holdout_eligible(candidate)]
         else:
             promotion_pool = [
                 candidate
                 for candidate in candidates
-                if candidate.gate.passed
+                if self._pre_holdout_eligible(candidate)
                 and candidate.holdout_report is not None
                 and candidate.holdout_report.passed
             ]
@@ -296,6 +406,8 @@ class ResearchFactory:
             winner = next((row for row in promotion_pool if row.horizon == horizon), None)
             if winner is not None:
                 horizon_champions[horizon] = winner
+
+        ensemble_report = self._build_ensemble(horizon_champions, research_bars)
 
         challenger = promotion_pool[0] if promotion_pool else None
         promoted = False
@@ -321,6 +433,7 @@ class ResearchFactory:
             active_champion=active_champion,
             promotion_occurred=promoted,
             horizon_champions=horizon_champions,
+            ensemble_report=ensemble_report,
             data_grade=metadata.grade,
             experiments_run=len(candidates),
             candidates_passed=len(promotion_pool),
