@@ -8,6 +8,7 @@ import pandas as pd
 from stockbot.arena.experiments import ModelExperimentResult
 from stockbot.data.schemas import DataGrade, DatasetMetadata
 from stockbot.ml.models import ModelConfig
+from stockbot.research.champion import ChampionState, JsonChampionStore, make_champion_state
 from stockbot.research.gates import GateDecision, ResearchGateCriteria, evaluate_research_gate
 from stockbot.research.holdout import HoldoutConfig, HoldoutReport, evaluate_blind_holdout, split_research_holdout
 from stockbot.research.memory import JsonlExperimentMemory, experiment_id, make_record
@@ -68,6 +69,8 @@ class FactoryCandidate:
 class FactoryReport:
     candidates: tuple[FactoryCandidate, ...]
     champion_candidate: FactoryCandidate | None
+    active_champion: ChampionState | None
+    promotion_occurred: bool
     horizon_champions: dict[int, FactoryCandidate]
     data_grade: DataGrade
     experiments_run: int
@@ -82,7 +85,9 @@ class ResearchFactory:
     Hyperparameters are selected only on the research partition. The final time block
     is reserved before the search starts and is exposed only to the strongest gated
     candidates. Promotion therefore requires both repeated purged walk-forward edge
-    and survival on an untouched blind holdout.
+    and survival on an untouched blind holdout. Persistent champion state is kept
+    separate from experiment memory so research-gate winners cannot masquerade as
+    deployed champions when they fail the final holdout.
     """
 
     def __init__(
@@ -90,9 +95,11 @@ class ResearchFactory:
         config: ResearchFactoryConfig | None = None,
         *,
         memory: JsonlExperimentMemory | None = None,
+        champion_store: JsonChampionStore | None = None,
     ) -> None:
         self.config = config or ResearchFactoryConfig()
         self.memory = memory
+        self.champion_store = champion_store
 
     @staticmethod
     def _model_from_result(result: ModelExperimentResult) -> ModelConfig:
@@ -220,12 +227,27 @@ class ResearchFactory:
         updated = [replacements.get(candidate.experiment_id, candidate) for candidate in candidates]
         return updated, len(selected)
 
+    @staticmethod
+    def _state_from_candidate(candidate: FactoryCandidate) -> ChampionState:
+        holdout_score = (
+            candidate.holdout_report.score
+            if candidate.holdout_report is not None
+            else candidate.promotion_score
+        )
+        return make_champion_state(
+            experiment_id=candidate.experiment_id,
+            horizon=candidate.horizon,
+            model_name=candidate.model_name,
+            model_params=candidate.model_params,
+            seed=candidate.seed,
+            dataset_fingerprint=candidate.result.artifact.dataset_fingerprint,
+            factory_score=candidate.factory_score,
+            promotion_score=candidate.promotion_score,
+            holdout_score=holdout_score,
+        )
+
     def run(self, bars: pd.DataFrame, metadata: DatasetMetadata) -> FactoryReport:
-        previous_best_score: float | None = None
-        if self.memory is not None:
-            previous = self.memory.best(only_passed=True, limit=1)
-            if previous:
-                previous_best_score = float(previous[0].factory_score)
+        incumbent = self.champion_store.load() if self.champion_store is not None else None
 
         holdout_start: pd.Timestamp | None = None
         research_bars = bars
@@ -275,14 +297,29 @@ class ResearchFactory:
             if winner is not None:
                 horizon_champions[horizon] = winner
 
-        champion = promotion_pool[0] if promotion_pool else None
-        if champion is not None and previous_best_score is not None:
-            if champion.factory_score < previous_best_score + self.config.promotion_margin:
-                champion = None
+        challenger = promotion_pool[0] if promotion_pool else None
+        promoted = False
+        active_champion = incumbent
+        champion_candidate: FactoryCandidate | None = None
+
+        if challenger is not None:
+            qualifies_against_incumbent = (
+                incumbent is None
+                or challenger.promotion_score
+                >= incumbent.promotion_score + self.config.promotion_margin
+            )
+            if qualifies_against_incumbent:
+                champion_candidate = challenger
+                active_champion = self._state_from_candidate(challenger)
+                promoted = True
+                if self.champion_store is not None:
+                    self.champion_store.save(active_champion)
 
         return FactoryReport(
             candidates=tuple(candidates),
-            champion_candidate=champion,
+            champion_candidate=champion_candidate,
+            active_champion=active_champion,
+            promotion_occurred=promoted,
             horizon_champions=horizon_champions,
             data_grade=metadata.grade,
             experiments_run=len(candidates),
