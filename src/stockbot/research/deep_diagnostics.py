@@ -5,6 +5,7 @@ from typing import Any
 
 import pandas as pd
 
+from stockbot.data.point_in_time_features import PointInTimeFeatureStore
 from stockbot.data.schemas import DatasetMetadata
 from stockbot.data.universe import PointInTimeUniverse
 from stockbot.ml.models import ModelConfig
@@ -130,6 +131,10 @@ def run_deep_research_diagnostics(
     bootstrap_samples: int = 500,
     bootstrap_confidence_level: float = 0.90,
     point_in_time_universe: PointInTimeUniverse | None = None,
+    auxiliary_store: PointInTimeFeatureStore | None = None,
+    auxiliary_feature_names: tuple[str, ...] | list[str] | None = None,
+    auxiliary_max_age_days: int | None = None,
+    auxiliary_min_coverage: float = 0.80,
 ) -> DeepResearchDiagnostics:
     """Run expensive diagnostics only on top generalists and only before blind holdout."""
 
@@ -161,6 +166,19 @@ def run_deep_research_diagnostics(
         factor_exposure = evaluate_factor_exposure(policy.best.net_returns, factor_returns)
         if candidate.result.predictions is None:
             raise ValueError("deep diagnostics require retained OOS predictions")
+
+        artifact_feature_names = tuple(
+            str(value) for value in getattr(candidate.result.artifact, "feature_names", ())
+        )
+        uses_auxiliary = any(name.startswith("aux__") for name in artifact_feature_names)
+        if uses_auxiliary and auxiliary_store is None:
+            raise ValueError(
+                "deep diagnostics cannot replay an auxiliary-feature candidate without its PointInTimeFeatureStore"
+            )
+        replay_store = auxiliary_store if uses_auxiliary else None
+        replay_aux_names = auxiliary_feature_names if uses_auxiliary else None
+        replay_feature_names = artifact_feature_names or None
+
         neutralization = None
         if point_in_time_universe is not None:
             neutralization = evaluate_sector_factor_neutralization(
@@ -194,6 +212,11 @@ def run_deep_research_diagnostics(
             horizon=int(candidate.horizon),
             train_windows=train_windows,
             test_periods=test_periods,
+            feature_columns=replay_feature_names,
+            auxiliary_store=replay_store,
+            auxiliary_feature_names=replay_aux_names,
+            auxiliary_max_age_days=auxiliary_max_age_days,
+            auxiliary_min_coverage=auxiliary_min_coverage,
         )
         ablation = evaluate_feature_group_ablation(
             research_bars,
@@ -202,6 +225,11 @@ def run_deep_research_diagnostics(
             horizon=int(candidate.horizon),
             train_periods=(None if not windows.results else windows.results[0].train_periods),
             test_periods=test_periods,
+            feature_columns=replay_feature_names,
+            auxiliary_store=replay_store,
+            auxiliary_feature_names=replay_aux_names,
+            auxiliary_max_age_days=auxiliary_max_age_days,
+            auxiliary_min_coverage=auxiliary_min_coverage,
         )
         diagnostics[candidate.experiment_id] = CandidateDeepDiagnostics(
             experiment_id=candidate.experiment_id,
