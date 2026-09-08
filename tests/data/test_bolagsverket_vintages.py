@@ -84,11 +84,14 @@ def test_future_filing_cannot_rewrite_earlier_materialized_fundamental_history()
     ).iloc[0, 0] == 100.0
 
     revenue_2024_vintages = sorted(
-        observation
-        for observation in combined.observations
-        if observation.feature_name == "revenue"
-        and observation.observation_time.startswith("2024-12-31")
-    , key=lambda observation: observation.available_time)
+        (
+            observation
+            for observation in combined.observations
+            if observation.feature_name == "revenue"
+            and observation.observation_time.startswith("2024-12-31")
+        ),
+        key=lambda observation: observation.available_time,
+    )
     assert [row.value for row in revenue_2024_vintages] == [100.0, 110.0]
     assert [row.available_time for row in revenue_2024_vintages] == [
         "2025-06-01T08:00:00+00:00",
