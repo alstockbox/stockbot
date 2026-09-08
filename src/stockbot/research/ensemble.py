@@ -40,6 +40,34 @@ def _softmax_weights(scores: dict[str, float], temperature: float) -> dict[str, 
     return {key: float(weight) for key, weight in zip(keys, weights)}
 
 
+def _correlation_adjusted_weights(
+    aligned_returns: pd.DataFrame,
+    base_weights: dict[str, float],
+) -> dict[str, float]:
+    """Downweight redundant members while preserving score-based preference."""
+
+    if len(base_weights) <= 1:
+        return dict(base_weights)
+
+    correlation = aligned_returns.corr(min_periods=20).abs()
+    adjusted: dict[str, float] = {}
+    for member, base_weight in base_weights.items():
+        if member not in correlation.index:
+            diversification_factor = 1.0
+        else:
+            peer_corr = correlation.loc[member].drop(labels=[member], errors="ignore").dropna()
+            average_corr = float(peer_corr.mean()) if len(peer_corr) else 0.5
+            # Low-correlation members receive more marginal weight; the 0.25 floor
+            # prevents an unstable near-zero-correlation estimate from dominating.
+            diversification_factor = 1.0 / (0.25 + max(0.0, min(1.0, average_corr)))
+        adjusted[member] = float(base_weight) * diversification_factor
+
+    total = sum(adjusted.values())
+    if not math.isfinite(total) or total <= 0.0:
+        return {member: 1.0 / len(adjusted) for member in adjusted}
+    return {member: value / total for member, value in adjusted.items()}
+
+
 def build_horizon_ensemble(
     returns_by_id: dict[str, pd.Series],
     promotion_scores: dict[str, float],
@@ -47,20 +75,22 @@ def build_horizon_ensemble(
     regime_series: pd.Series | None = None,
     temperature: float = 0.75,
 ) -> EnsembleReport:
-    """Blend independently selected horizon champions into a diversified return stream."""
+    """Blend horizon champions using score and incremental diversification value."""
 
     if not returns_by_id:
         raise ValueError("at least one ensemble member is required")
     if set(returns_by_id) != set(promotion_scores):
         raise ValueError("returns_by_id and promotion_scores must have identical keys")
 
-    weights = _softmax_weights(promotion_scores, temperature)
     aligned = pd.concat(
         [pd.Series(series, dtype=float).rename(member) for member, series in returns_by_id.items()],
         axis=1,
         join="outer",
     ).sort_index()
     aligned = aligned.replace([np.inf, -np.inf], np.nan)
+
+    base_weights = _softmax_weights(promotion_scores, temperature)
+    weights = _correlation_adjusted_weights(aligned, base_weights)
 
     availability = aligned.notna().astype(float)
     weighted = aligned.fillna(0.0).mul(pd.Series(weights), axis=1)
