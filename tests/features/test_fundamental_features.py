@@ -4,6 +4,7 @@ from stockbot.data.providers.bolagsverket_ixbrl import (
     BolagsverketDocument,
     build_feature_store_from_xbrl,
 )
+from stockbot.features.fundamentals import add_derived_fundamentals
 
 
 def _document():
@@ -40,13 +41,17 @@ def _xbrl():
 </xbrli:xbrl>'''
 
 
-def test_derived_fundamentals_are_computed_inside_same_filing_vintage():
-    store = build_feature_store_from_xbrl(
-        _xbrl(),
+def _store(xbrl=None):
+    raw = build_feature_store_from_xbrl(
+        _xbrl() if xbrl is None else xbrl,
         document=_document(),
         symbol="AAA",
-        include_derived_fundamentals=True,
     )
+    return add_derived_fundamentals(raw)
+
+
+def test_derived_fundamentals_are_computed_inside_same_filing_vintage():
+    store = _store()
 
     expected = {
         "revenue_yoy": 0.25,
@@ -91,12 +96,7 @@ def test_zero_denominator_does_not_emit_infinite_derived_features():
         b'<se:Nettoomsattning contextRef="p2025" unitRef="SEK">125</se:Nettoomsattning>',
         b'<se:Nettoomsattning contextRef="p2025" unitRef="SEK">0</se:Nettoomsattning>',
     )
-    store = build_feature_store_from_xbrl(
-        zero_revenue,
-        document=_document(),
-        symbol="AAA",
-        include_derived_fundamentals=True,
-    )
+    store = _store(zero_revenue)
 
     names = set(store.feature_names)
     assert "operating_margin" not in names
