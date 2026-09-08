@@ -10,7 +10,7 @@ from stockbot.arena.leaderboard import eligible_for_promotion, rank_experiments
 from stockbot.data.panel import build_panel
 from stockbot.data.point_in_time_features import PointInTimeFeatureStore
 from stockbot.data.schemas import DataGrade, DatasetMetadata
-from stockbot.features.cross_sectional import add_cross_sectional_features
+from stockbot.features.research_matrix import BASE_RESEARCH_FEATURE_COLUMNS, build_research_feature_matrix
 from stockbot.ml.labels import make_panel_labels
 from stockbot.ml.models import ModelConfig
 from stockbot.ml.purged_cv import PurgedWalkForwardSplitter
@@ -24,46 +24,8 @@ DEFAULT_MODELS = (
     ModelConfig("hist_gb", seed=7),
 )
 
-# Causal features spanning momentum, volatility, liquidity, trend/location,
-# intraday structure, interactions and same-date cross-sectional ranks.
-FEATURE_COLUMNS = (
-    "return_1",
-    "return_5",
-    "return_20",
-    "momentum_5",
-    "momentum_20",
-    "momentum_60",
-    "realized_vol_5",
-    "realized_vol_20",
-    "realized_vol_60",
-    "volume_z_5",
-    "volume_z_20",
-    "volume_z_60",
-    "log_dollar_volume",
-    "dollar_volume_z_20",
-    "sma_5_dist",
-    "sma_20_dist",
-    "sma_60_dist",
-    "distance_high_20",
-    "distance_low_20",
-    "range_1",
-    "range_20",
-    "gap_1",
-    "rsi_14",
-    "momentum_vol_ratio_20",
-    "momentum_volume_interaction",
-    "return_1_rank",
-    "momentum_5_rank",
-    "momentum_rank",
-    "momentum_60_rank",
-    "volatility_5_rank",
-    "volatility_rank",
-    "volatility_60_rank",
-    "volume_rank",
-    "liquidity_rank",
-    "range_rank",
-    "rsi_rank",
-)
+# Backward-compatible public alias used by holdout/ablation modules.
+FEATURE_COLUMNS = BASE_RESEARCH_FEATURE_COLUMNS
 
 
 @dataclass(frozen=True)
@@ -99,53 +61,17 @@ def run_training_research(
         raise ValueError("train_periods must be positive")
     if test_periods is not None and test_periods <= 0:
         raise ValueError("test_periods must be positive")
-    if not 0.0 < auxiliary_min_coverage <= 1.0:
-        raise ValueError("auxiliary_min_coverage must be in (0,1]")
-    if auxiliary_store is None and auxiliary_feature_names is not None:
-        raise ValueError("auxiliary_feature_names require a PointInTimeFeatureStore")
 
     panel = build_panel(bars)
-    all_features = add_cross_sectional_features(panel)
-    auxiliary_columns: tuple[str, ...] = ()
-    if auxiliary_store is not None:
-        requested = (
-            auxiliary_store.feature_names
-            if auxiliary_feature_names is None
-            else tuple(str(value).strip() for value in auxiliary_feature_names)
-        )
-        coverage = auxiliary_store.coverage_for_index(
-            panel.index,
-            feature_names=requested,
-            max_age_days=auxiliary_max_age_days,
-            min_coverage=auxiliary_min_coverage,
-        )
-        if not coverage.research_grade_auxiliary:
-            raise ValueError(
-                "auxiliary point-in-time feature gate failed: " + ",".join(coverage.reasons)
-            )
-        auxiliary = auxiliary_store.materialize(
-            panel.index,
-            feature_names=requested,
-            max_age_days=auxiliary_max_age_days,
-        )
-        auxiliary = auxiliary.rename(columns={column: f"aux__{column}" for column in auxiliary.columns})
-        collisions = sorted(set(auxiliary.columns).intersection(all_features.columns))
-        if collisions:
-            raise ValueError(f"auxiliary feature name collision: {collisions}")
-        all_features = pd.concat([all_features, auxiliary], axis=1)
-        auxiliary_columns = tuple(auxiliary.columns)
-
-    selected_features = (
-        tuple(feature_columns)
-        if feature_columns is not None
-        else FEATURE_COLUMNS + auxiliary_columns
+    matrix = build_research_feature_matrix(
+        panel,
+        feature_columns=feature_columns,
+        auxiliary_store=auxiliary_store,
+        auxiliary_feature_names=auxiliary_feature_names,
+        auxiliary_max_age_days=auxiliary_max_age_days,
+        auxiliary_min_coverage=auxiliary_min_coverage,
     )
-    if not selected_features:
-        raise ValueError("at least one feature column is required")
-    missing_features = sorted(set(selected_features).difference(all_features.columns))
-    if missing_features:
-        raise ValueError(f"unknown feature columns: {missing_features}")
-    features = all_features.loc[:, selected_features]
+    features = matrix.frame
     labels = make_panel_labels(panel, horizons=(horizon,))[f"fwd_return_{horizon}"]
     labels.name = f"fwd_return_{horizon}"
 
@@ -183,5 +109,5 @@ def run_training_research(
         metadata.grade,
         fingerprint,
         horizon,
-        auxiliary_features=auxiliary_columns,
+        auxiliary_features=matrix.auxiliary_features,
     )
