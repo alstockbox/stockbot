@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -71,15 +72,33 @@ def run_snapshot_factory(
     config: ResearchFactoryConfig | None = None,
     memory_path: str | None = None,
 ) -> FactoryReport:
-    """Run the V2 multi-horizon research factory on an immutable market snapshot."""
+    """Run V2 on an immutable snapshot, evolving challengers from prior memory when available."""
 
     memory = JsonlExperimentMemory(memory_path) if memory_path else None
     champion_store = None
     if memory_path:
         memory_file = Path(memory_path)
         champion_store = JsonChampionStore(memory_file.with_suffix(".champion.json"))
+
+    effective_config = config or ResearchFactoryConfig()
+    if memory is not None and not effective_config.population.adaptive_records:
+        parents = tuple(
+            memory.best(
+                only_passed=True,
+                limit=effective_config.population.adaptive_parent_limit,
+            )
+        )
+        if parents:
+            effective_config = replace(
+                effective_config,
+                population=replace(
+                    effective_config.population,
+                    adaptive_records=parents,
+                ),
+            )
+
     factory = ResearchFactory(
-        config,
+        effective_config,
         memory=memory,
         champion_store=champion_store,
     )
