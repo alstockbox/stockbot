@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from stockbot.data.market_schema import validate_canonical_bars
+from stockbot.data.point_in_time_features import PointInTimeFeatureStore
 from stockbot.data.research_quality import ResearchDataQualityReport, verified_data_grade
 from stockbot.data.schemas import DatasetMetadata
 from stockbot.data.snapshots import MarketSnapshot
@@ -52,13 +53,7 @@ def _snapshot_metadata(
     snapshot: MarketSnapshot,
     quality_report: ResearchDataQualityReport | None = None,
 ) -> DatasetMetadata:
-    """Create training metadata with fail-closed research-grade verification.
-
-    A snapshot that merely declares ``RESEARCH_GRADE`` is downgraded to ``BOOTSTRAP``
-    unless an explicit quality report proves point-in-time universe coverage, causal
-    retrieval, adjusted-price integrity and corporate-action attestations. Lower grades
-    are never upgraded by this helper.
-    """
+    """Create training metadata with fail-closed research-grade verification."""
 
     return DatasetMetadata(
         name=snapshot.snapshot_id,
@@ -91,12 +86,20 @@ def train_snapshot(
     quarantine_config: QuarantineConfig | None = None,
     quarantine_manifest_path: str | Path | None = None,
     quality_report: ResearchDataQualityReport | None = None,
+    auxiliary_store: PointInTimeFeatureStore | None = None,
+    auxiliary_feature_names: tuple[str, ...] | list[str] | None = None,
+    auxiliary_max_age_days: int | None = None,
+    auxiliary_min_coverage: float = 0.80,
 ) -> TrainingRun:
     return run_training_research(
         _development_bars(snapshot, quarantine_config, quarantine_manifest_path),
         _snapshot_metadata(snapshot, quality_report),
         model_configs=model_configs,
         horizon=horizon,
+        auxiliary_store=auxiliary_store,
+        auxiliary_feature_names=auxiliary_feature_names,
+        auxiliary_max_age_days=auxiliary_max_age_days,
+        auxiliary_min_coverage=auxiliary_min_coverage,
     )
 
 
@@ -108,8 +111,12 @@ def run_snapshot_factory(
     quarantine_config: QuarantineConfig | None = None,
     quarantine_manifest_path: str | Path | None = None,
     quality_report: ResearchDataQualityReport | None = None,
+    auxiliary_store: PointInTimeFeatureStore | None = None,
+    auxiliary_feature_names: tuple[str, ...] | list[str] | None = None,
+    auxiliary_max_age_days: int | None = None,
+    auxiliary_min_coverage: float = 0.80,
 ) -> FactoryReport:
-    """Run V2 on development data only with verified data-grade semantics."""
+    """Run V2 on development data only with verified data and feature semantics."""
 
     memory = JsonlExperimentMemory(memory_path) if memory_path else None
     champion_store = None
@@ -142,6 +149,10 @@ def run_snapshot_factory(
     return factory.run(
         _development_bars(snapshot, quarantine_config, quarantine_manifest_path),
         _snapshot_metadata(snapshot, quality_report),
+        auxiliary_store=auxiliary_store,
+        auxiliary_feature_names=auxiliary_feature_names,
+        auxiliary_max_age_days=auxiliary_max_age_days,
+        auxiliary_min_coverage=auxiliary_min_coverage,
     )
 
 
@@ -153,14 +164,22 @@ def run_snapshot_regime_specialists(
     quarantine_config: QuarantineConfig | None = None,
     quarantine_manifest_path: str | Path | None = None,
     quality_report: ResearchDataQualityReport | None = None,
+    auxiliary_store: PointInTimeFeatureStore | None = None,
+    auxiliary_feature_names: tuple[str, ...] | list[str] | None = None,
+    auxiliary_max_age_days: int | None = None,
+    auxiliary_min_coverage: float = 0.80,
 ) -> RegimeSpecialistDiagnostics:
-    """Run regime-specialist diagnostics without exposing sealed quarantine data."""
+    """Run regime specialists without changing the candidate feature contract."""
 
     return run_regime_specialist_diagnostics(
         _development_bars(snapshot, quarantine_config, quarantine_manifest_path),
         _snapshot_metadata(snapshot, quality_report),
         report.candidates,
         top_k_per_horizon=top_k_per_horizon,
+        auxiliary_store=auxiliary_store,
+        auxiliary_feature_names=auxiliary_feature_names,
+        auxiliary_max_age_days=auxiliary_max_age_days,
+        auxiliary_min_coverage=auxiliary_min_coverage,
     )
 
 
@@ -187,8 +206,12 @@ def run_snapshot_deep_diagnostics(
     quarantine_manifest_path: str | Path | None = None,
     quality_report: ResearchDataQualityReport | None = None,
     point_in_time_universe: PointInTimeUniverse | None = None,
+    auxiliary_store: PointInTimeFeatureStore | None = None,
+    auxiliary_feature_names: tuple[str, ...] | list[str] | None = None,
+    auxiliary_max_age_days: int | None = None,
+    auxiliary_min_coverage: float = 0.80,
 ) -> DeepResearchDiagnostics:
-    """Run holdout-safe deep diagnostics without exposing sealed quarantine data."""
+    """Run holdout-safe deep diagnostics with exact feature replay."""
 
     return run_deep_research_diagnostics(
         _development_bars(snapshot, quarantine_config, quarantine_manifest_path),
@@ -200,4 +223,8 @@ def run_snapshot_deep_diagnostics(
         liquidity_config=liquidity_config,
         capacity_levels=capacity_levels,
         point_in_time_universe=point_in_time_universe,
+        auxiliary_store=auxiliary_store,
+        auxiliary_feature_names=auxiliary_feature_names,
+        auxiliary_max_age_days=auxiliary_max_age_days,
+        auxiliary_min_coverage=auxiliary_min_coverage,
     )
