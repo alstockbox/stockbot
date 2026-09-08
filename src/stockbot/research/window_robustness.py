@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from stockbot.data.point_in_time_features import PointInTimeFeatureStore
 from stockbot.data.schemas import DatasetMetadata
 from stockbot.ml.models import ModelConfig
 from stockbot.research.training_pipeline import run_training_research
@@ -37,6 +38,11 @@ def evaluate_training_window_robustness(
     horizon: int,
     train_windows: tuple[int, ...] = (126, 252, 504),
     test_periods: int = 21,
+    feature_columns: tuple[str, ...] | list[str] | None = None,
+    auxiliary_store: PointInTimeFeatureStore | None = None,
+    auxiliary_feature_names: tuple[str, ...] | list[str] | None = None,
+    auxiliary_max_age_days: int | None = None,
+    auxiliary_min_coverage: float = 0.80,
 ) -> WindowRobustnessReport:
     """Re-run one challenger across multiple walk-forward memory lengths."""
 
@@ -62,6 +68,11 @@ def evaluate_training_window_robustness(
             max_workers=1,
             train_periods=window,
             test_periods=test_periods,
+            feature_columns=feature_columns,
+            auxiliary_store=auxiliary_store,
+            auxiliary_feature_names=auxiliary_feature_names,
+            auxiliary_max_age_days=auxiliary_max_age_days,
+            auxiliary_min_coverage=auxiliary_min_coverage,
         )
         if not run.leaderboard:
             continue
