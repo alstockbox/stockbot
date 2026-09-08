@@ -4,11 +4,13 @@ from dataclasses import dataclass
 from itertools import product
 
 from stockbot.ml.models import ModelConfig
+from stockbot.research.adaptive_population import AdaptivePopulationConfig, generate_adaptive_population
+from stockbot.research.memory import ExperimentRecord
 
 
 @dataclass(frozen=True)
 class ModelPopulationConfig:
-    """Deterministic search space for challenger generation."""
+    """Deterministic search space for broad + adaptive challenger generation."""
 
     seeds: tuple[int, ...] = (7, 19)
     ridge_alphas: tuple[float, ...] = (0.1, 1.0, 10.0)
@@ -21,12 +23,21 @@ class ModelPopulationConfig:
     hist_leaf_nodes: tuple[int, ...] = (7, 15, 31)
     hist_l2: tuple[float, ...] = (0.0, 0.1, 1.0)
     max_candidates: int = 160
+    adaptive_records: tuple[ExperimentRecord, ...] = ()
+    adaptive_fraction: float = 0.35
+    adaptive_parent_limit: int = 12
+    adaptive_mutations_per_parent: int = 4
 
     def __post_init__(self) -> None:
         if self.max_candidates <= 0:
             raise ValueError("max_candidates must be positive")
         if not self.seeds:
             raise ValueError("at least one seed is required")
+        AdaptivePopulationConfig(
+            adaptive_fraction=self.adaptive_fraction,
+            parent_limit=self.adaptive_parent_limit,
+            mutations_per_parent=self.adaptive_mutations_per_parent,
+        )
 
 
 def _families(config: ModelPopulationConfig) -> list[list[ModelConfig]]:
@@ -78,15 +89,7 @@ def _families(config: ModelPopulationConfig) -> list[list[ModelConfig]]:
     return [ridge, elastic, extra_trees, random_forest, hist_gb]
 
 
-def generate_model_population(config: ModelPopulationConfig | None = None) -> list[ModelConfig]:
-    """Create a broad but balanced challenger population.
-
-    Candidates are interleaved by model family rather than taking one giant grid in
-    family order. This guarantees that a capped experiment budget still explores
-    linear, bagged-tree and boosting families.
-    """
-
-    cfg = config or ModelPopulationConfig()
+def _broad_population(cfg: ModelPopulationConfig) -> list[ModelConfig]:
     families = _families(cfg)
     population: list[ModelConfig] = []
     cursor = 0
@@ -102,3 +105,29 @@ def generate_model_population(config: ModelPopulationConfig | None = None) -> li
             break
         cursor += 1
     return population
+
+
+def generate_model_population(config: ModelPopulationConfig | None = None) -> list[ModelConfig]:
+    """Create a balanced population, optionally evolved from prior research memory.
+
+    Broad grid candidates remain interleaved by model family. When historical records
+    are supplied, a bounded fraction of the budget is replaced by local mutations of
+    the strongest prior experiments, preserving exploration while accelerating search
+    around regions that previously showed promising OOS evidence.
+    """
+
+    cfg = config or ModelPopulationConfig()
+    broad = _broad_population(cfg)
+    if not cfg.adaptive_records or cfg.adaptive_fraction <= 0.0:
+        return broad
+
+    return generate_adaptive_population(
+        broad,
+        cfg.adaptive_records,
+        max_candidates=cfg.max_candidates,
+        config=AdaptivePopulationConfig(
+            adaptive_fraction=cfg.adaptive_fraction,
+            parent_limit=cfg.adaptive_parent_limit,
+            mutations_per_parent=cfg.adaptive_mutations_per_parent,
+        ),
+    )
