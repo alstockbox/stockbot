@@ -13,6 +13,8 @@ from stockbot.research.objective import ObjectiveWeights, risk_adjusted_objectiv
 from stockbot.research.population import ModelPopulationConfig, generate_model_population
 from stockbot.research.readiness import PaperReadinessReport, evaluate_paper_readiness
 from stockbot.research.regime_eval import RegimePerformanceReport, build_market_regime_series, evaluate_regime_performance
+from stockbot.research.regime_router import RegimeRouterReport, build_regime_router
+from stockbot.research.regime_specialists import RegimeSpecialistResult, run_regime_specialist, select_best_regime_specialists
 from stockbot.research.stress import StressReport, StressScenario, default_stress_suite, evaluate_stress_suite
 
 __all__ = [
@@ -31,6 +33,8 @@ __all__ = [
     "ObjectiveWeights",
     "PaperReadinessReport",
     "RegimePerformanceReport",
+    "RegimeRouterReport",
+    "RegimeSpecialistResult",
     "ResearchFactory",
     "ResearchFactoryConfig",
     "ResearchGateCriteria",
@@ -41,6 +45,7 @@ __all__ = [
     "benjamini_hochberg",
     "build_horizon_ensemble",
     "build_market_regime_series",
+    "build_regime_router",
     "default_stress_suite",
     "evaluate_blind_holdout",
     "evaluate_discoveries",
@@ -54,7 +59,9 @@ __all__ = [
     "make_run_summary",
     "mine_hard_negatives",
     "risk_adjusted_objective",
+    "run_regime_specialist",
     "run_snapshot_factory",
+    "select_best_regime_specialists",
     "split_research_holdout",
     "train_snapshot",
     "write_json_record",
