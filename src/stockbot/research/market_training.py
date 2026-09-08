@@ -11,6 +11,7 @@ from stockbot.data.snapshots import MarketSnapshot
 from stockbot.research.champion import JsonChampionStore
 from stockbot.research.factory import FactoryReport, ResearchFactory, ResearchFactoryConfig
 from stockbot.research.memory import JsonlExperimentMemory
+from stockbot.research.specialist_pipeline import RegimeSpecialistDiagnostics, run_regime_specialist_diagnostics
 from stockbot.research.training_pipeline import TrainingRun, run_training_research
 
 
@@ -85,4 +86,20 @@ def run_snapshot_factory(
     return factory.run(
         prepare_training_bars(snapshot.bars),
         _snapshot_metadata(snapshot),
+    )
+
+
+def run_snapshot_regime_specialists(
+    snapshot: MarketSnapshot,
+    report: FactoryReport,
+    *,
+    top_k_per_horizon: int = 2,
+) -> RegimeSpecialistDiagnostics:
+    """Run the optional V2.1 regime-specialist diagnostics on a finished factory report."""
+
+    return run_regime_specialist_diagnostics(
+        prepare_training_bars(snapshot.bars),
+        _snapshot_metadata(snapshot),
+        report.candidates,
+        top_k_per_horizon=top_k_per_horizon,
     )
