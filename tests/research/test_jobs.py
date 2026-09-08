@@ -49,11 +49,16 @@ def test_job_manifest_is_deterministic_for_same_research_inputs():
         max_workers=4,
         memory_path="research_memory/experiments.jsonl",
         auxiliary_fingerprint="aux-a",
-        auxiliary_features=("policy_rate", "eps_ttm"),
         universe_fingerprint="universe-a",
     )
-    first = make_job_manifest(**kwargs)
-    second = make_job_manifest(**kwargs, auxiliary_features=("eps_ttm", "policy_rate"))
+    first = make_job_manifest(
+        **kwargs,
+        auxiliary_features=("policy_rate", "eps_ttm"),
+    )
+    second = make_job_manifest(
+        **kwargs,
+        auxiliary_features=("eps_ttm", "policy_rate"),
+    )
     assert first.job_id == second.job_id
     assert first.horizons == (1, 5, 20)
     assert first.auxiliary_features == ("eps_ttm", "policy_rate")
