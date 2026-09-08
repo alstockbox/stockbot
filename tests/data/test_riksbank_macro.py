@@ -75,10 +75,10 @@ def test_missing_cutoff_or_publication_time_fails_closed():
         )
 
 
-def test_future_forecast_requires_explicit_horizon_schema_when_not_filtered():
+def test_future_forecast_requires_explicit_forecast_parser_when_not_filtered():
     provider = RiksbankMonetaryPolicyProvider(transport=_FakeTransport())
 
-    with pytest.raises(ProviderError, match="horizon-aware"):
+    with pytest.raises(ProviderError, match="forecast_observations_from_payload"):
         provider.observations_from_payload(
             _payload(),
             feature_name="policy_rate",
