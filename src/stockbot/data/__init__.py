@@ -1,3 +1,10 @@
+from stockbot.data.point_in_time_features import (
+    AuxiliaryFeatureCoverageReport,
+    AuxiliaryFeatureKind,
+    PointInTimeFeatureManifest,
+    PointInTimeFeatureObservation,
+    PointInTimeFeatureStore,
+)
 from stockbot.data.research_quality import (
     ResearchDataAttestation,
     ResearchDataQualityCriteria,
@@ -14,8 +21,13 @@ from stockbot.data.universe import (
 )
 
 __all__ = [
+    "AuxiliaryFeatureCoverageReport",
+    "AuxiliaryFeatureKind",
     "DataGrade",
     "DatasetMetadata",
+    "PointInTimeFeatureManifest",
+    "PointInTimeFeatureObservation",
+    "PointInTimeFeatureStore",
     "PointInTimeUniverse",
     "ResearchDataAttestation",
     "ResearchDataQualityCriteria",
