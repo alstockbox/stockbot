@@ -19,7 +19,10 @@ class ResearchJobManifest:
     memory_path: str | None
     created_at: str
     quarantine_start: str | None = None
-    schema_version: int = 2
+    auxiliary_fingerprint: str | None = None
+    auxiliary_features: tuple[str, ...] = ()
+    universe_fingerprint: str | None = None
+    schema_version: int = 3
 
 
 @dataclass(frozen=True)
@@ -48,7 +51,11 @@ def make_job_manifest(
     max_workers: int,
     memory_path: str | None,
     quarantine_start: str | None = None,
+    auxiliary_fingerprint: str | None = None,
+    auxiliary_features: tuple[str, ...] | list[str] = (),
+    universe_fingerprint: str | None = None,
 ) -> ResearchJobManifest:
+    normalized_auxiliary = tuple(sorted({str(value).strip() for value in auxiliary_features if str(value).strip()}))
     payload = {
         "snapshot_id": snapshot_id,
         "dataset_fingerprint": dataset_fingerprint,
@@ -57,6 +64,9 @@ def make_job_manifest(
         "max_workers": int(max_workers),
         "memory_path": memory_path,
         "quarantine_start": quarantine_start,
+        "auxiliary_fingerprint": auxiliary_fingerprint,
+        "auxiliary_features": normalized_auxiliary,
+        "universe_fingerprint": universe_fingerprint,
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
     job_id = hashlib.sha256(raw).hexdigest()[:24]
@@ -70,6 +80,9 @@ def make_job_manifest(
         memory_path=memory_path,
         created_at=datetime.now(timezone.utc).isoformat(),
         quarantine_start=quarantine_start,
+        auxiliary_fingerprint=auxiliary_fingerprint,
+        auxiliary_features=normalized_auxiliary,
+        universe_fingerprint=universe_fingerprint,
     )
 
 
@@ -121,6 +134,8 @@ def write_json_record(path: str | Path, record: ResearchJobManifest | ResearchRu
     payload = asdict(record)
     if "horizons" in payload:
         payload["horizons"] = list(payload["horizons"])
+    if "auxiliary_features" in payload:
+        payload["auxiliary_features"] = list(payload["auxiliary_features"])
     _atomic_write_json(path, payload)
 
 
