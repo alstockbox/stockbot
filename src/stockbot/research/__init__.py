@@ -1,4 +1,5 @@
 from stockbot.research.adaptive_population import AdaptivePopulationConfig, generate_adaptive_population
+from stockbot.research.auxiliary_ablation import AuxiliaryAblationReport, AuxiliaryAblationResult, evaluate_auxiliary_feature_ablation
 from stockbot.research.bootstrap_uncertainty import BootstrapInterval, BootstrapUncertaintyReport, evaluate_block_bootstrap_uncertainty
 from stockbot.research.capacity_curve import CapacityCurveReport, CapacityPoint, evaluate_capacity_curve
 from stockbot.research.champion import ChampionState, JsonChampionStore
@@ -46,6 +47,8 @@ from stockbot.research.window_robustness import WindowResult, WindowRobustnessRe
 
 __all__ = [
     "AdaptivePopulationConfig",
+    "AuxiliaryAblationReport",
+    "AuxiliaryAblationResult",
     "BootstrapInterval",
     "BootstrapUncertaintyReport",
     "CandidateDeepDiagnostics",
@@ -102,6 +105,7 @@ __all__ = [
     "build_regime_router",
     "compact_deep_diagnostics",
     "default_stress_suite",
+    "evaluate_auxiliary_feature_ablation",
     "evaluate_blind_holdout",
     "evaluate_block_bootstrap_uncertainty",
     "evaluate_capacity_curve",
