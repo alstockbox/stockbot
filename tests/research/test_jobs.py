@@ -55,6 +55,21 @@ def test_job_manifest_is_deterministic_for_same_research_inputs():
     assert first.horizons == (1, 5, 20)
 
 
+def test_job_identity_changes_when_sealed_quarantine_boundary_changes():
+    kwargs = dict(
+        snapshot_id="snapshot-a",
+        dataset_fingerprint="fingerprint-a",
+        horizons=(1, 5, 20),
+        max_candidates=160,
+        max_workers=4,
+        memory_path="research_memory/experiments.jsonl",
+    )
+    first = make_job_manifest(**kwargs, quarantine_start="2026-01-01")
+    second = make_job_manifest(**kwargs, quarantine_start="2026-03-01")
+    assert first.job_id != second.job_id
+    assert first.quarantine_start == "2026-01-01"
+
+
 def test_run_summary_and_atomic_json_writer(tmp_path):
     manifest = make_job_manifest(
         snapshot_id="snapshot-a",
