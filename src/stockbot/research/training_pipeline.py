@@ -81,11 +81,17 @@ def run_training_research(
     horizon: int = 5,
     *,
     max_workers: int = 1,
+    train_periods: int | None = None,
+    test_periods: int | None = None,
 ) -> TrainingRun:
     if horizon <= 0:
         raise ValueError("horizon must be positive")
     if max_workers <= 0:
         raise ValueError("max_workers must be positive")
+    if train_periods is not None and train_periods <= 0:
+        raise ValueError("train_periods must be positive")
+    if test_periods is not None and test_periods <= 0:
+        raise ValueError("test_periods must be positive")
 
     panel = build_panel(bars)
     features = add_cross_sectional_features(panel).loc[:, FEATURE_COLUMNS]
@@ -93,9 +99,11 @@ def run_training_research(
     labels.name = f"fwd_return_{horizon}"
 
     n_dates = len(panel.index.get_level_values("timestamp").unique())
-    train_periods = max(60, min(126, n_dates // 2))
-    test_periods = max(10, min(21, n_dates // 10))
-    splitter = PurgedWalkForwardSplitter(train_periods, test_periods, horizon, horizon)
+    effective_train = train_periods if train_periods is not None else max(60, min(126, n_dates // 2))
+    effective_test = test_periods if test_periods is not None else max(10, min(21, n_dates // 10))
+    if effective_train + horizon + effective_test > n_dates:
+        raise ValueError("insufficient dates for requested walk-forward train/test periods")
+    splitter = PurgedWalkForwardSplitter(effective_train, effective_test, horizon, horizon)
     configs = tuple(model_configs) if model_configs is not None else DEFAULT_MODELS
 
     def run_one(config: ModelConfig) -> ModelExperimentResult:
