@@ -24,6 +24,7 @@ class ResearchFactoryConfig:
     gates: ResearchGateCriteria = field(default_factory=ResearchGateCriteria)
     objective: ObjectiveWeights = field(default_factory=ObjectiveWeights)
     promotion_margin: float = 0.02
+    max_workers: int = 4
 
     def __post_init__(self) -> None:
         if not self.horizons or any(horizon <= 0 for horizon in self.horizons):
@@ -32,6 +33,8 @@ class ResearchFactoryConfig:
             raise ValueError("horizons must be unique")
         if self.promotion_margin < 0:
             raise ValueError("promotion_margin must be non-negative")
+        if self.max_workers <= 0:
+            raise ValueError("max_workers must be positive")
 
 
 @dataclass(frozen=True)
@@ -66,7 +69,7 @@ class ResearchFactory:
     The factory expands the existing V1 training pipeline rather than replacing it.
     Every challenger still uses causal cross-sectional features and purged walk-forward
     OOS evaluation. The factory adds population search, a stronger objective, hard
-    gates, multi-horizon competition and persistent research memory.
+    gates, multi-horizon competition, parallel execution and persistent research memory.
     """
 
     def __init__(
@@ -144,6 +147,12 @@ class ResearchFactory:
         return candidate
 
     def run(self, bars: pd.DataFrame, metadata: DatasetMetadata) -> FactoryReport:
+        previous_best_score: float | None = None
+        if self.memory is not None:
+            previous = self.memory.best(only_passed=True, limit=1)
+            if previous:
+                previous_best_score = float(previous[0].factory_score)
+
         population = generate_model_population(self.config.population)
         candidates: list[FactoryCandidate] = []
 
@@ -153,6 +162,7 @@ class ResearchFactory:
                 metadata,
                 model_configs=population,
                 horizon=horizon,
+                max_workers=self.config.max_workers,
             )
             candidates.extend(
                 self._candidate(result, metadata, horizon=horizon)
@@ -169,16 +179,9 @@ class ResearchFactory:
                 horizon_champions[horizon] = winner
 
         champion = passed[0] if passed else None
-        if champion is not None and self.memory is not None:
-            incumbents = [
-                row
-                for row in self.memory.best(only_passed=True, limit=100)
-                if row.experiment_id != champion.experiment_id
-            ]
-            if incumbents:
-                incumbent_score = max(row.factory_score for row in incumbents)
-                if champion.factory_score < incumbent_score + self.config.promotion_margin:
-                    champion = None
+        if champion is not None and previous_best_score is not None:
+            if champion.factory_score < previous_best_score + self.config.promotion_margin:
+                champion = None
 
         return FactoryReport(
             candidates=tuple(candidates),
