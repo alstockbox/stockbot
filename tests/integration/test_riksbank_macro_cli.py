@@ -34,12 +34,27 @@ class _FakeProvider:
             ),
         )
 
-    def build_vintage_store(self, series, *, start_year, end_year):
-        self.calls.append(("vintages", tuple(item.feature_name for item in series), start_year, end_year))
+    def build_vintage_store(self, series, *, start_year, end_year, include_forecasts=False):
+        self.calls.append(
+            (
+                "vintages",
+                tuple(item.feature_name for item in series),
+                start_year,
+                end_year,
+                bool(include_forecasts),
+            )
+        )
         return self._store()
 
-    def build_store(self, series, *, policy_round):
-        self.calls.append(("round", tuple(item.feature_name for item in series), policy_round))
+    def build_store(self, series, *, policy_round, include_forecasts=False):
+        self.calls.append(
+            (
+                "round",
+                tuple(item.feature_name for item in series),
+                policy_round,
+                bool(include_forecasts),
+            )
+        )
         return self._store()
 
 
@@ -61,7 +76,7 @@ def test_riksbank_cli_writes_fingerprinted_research_input(tmp_path):
     provider = _FakeProvider()
 
     assert run_from_args(args, provider=provider) == 0
-    assert provider.calls == [("vintages", ("policy_rate",), 2021, 2025)]
+    assert provider.calls == [("vintages", ("policy_rate",), 2021, 2025, False)]
 
     loaded = load_point_in_time_feature_store(output)
     assert loaded.feature_names == ("policy_rate",)
@@ -86,7 +101,30 @@ def test_riksbank_cli_single_round_uses_round_mode(tmp_path):
     provider = _FakeProvider()
 
     assert run_from_args(args, provider=provider) == 0
-    assert provider.calls == [("round", ("policy_rate",), "2025:1")]
+    assert provider.calls == [("round", ("policy_rate",), "2025:1", False)]
+
+
+def test_riksbank_cli_include_forecasts_is_explicit_opt_in(tmp_path):
+    parser = build_parser()
+    output = tmp_path / "forecast.json"
+    args = parser.parse_args(
+        [
+            "--output",
+            str(output),
+            "--series",
+            "policy_rate,cpif_yoy",
+            "--start-year",
+            "2022",
+            "--include-forecasts",
+        ]
+    )
+    provider = _FakeProvider()
+
+    assert args.include_forecasts is True
+    assert run_from_args(args, provider=provider) == 0
+    assert provider.calls == [
+        ("vintages", ("policy_rate", "cpif_yoy"), 2022, None, True)
+    ]
 
 
 def test_riksbank_series_alias_parser_rejects_unknown_and_duplicates():
