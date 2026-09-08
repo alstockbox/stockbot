@@ -10,6 +10,7 @@ from stockbot.data.market_schema import validate_canonical_bars
 from stockbot.data.research_quality import ResearchDataQualityReport, verified_data_grade
 from stockbot.data.schemas import DatasetMetadata
 from stockbot.data.snapshots import MarketSnapshot
+from stockbot.data.universe import PointInTimeUniverse
 from stockbot.research.champion import JsonChampionStore
 from stockbot.research.deep_diagnostics import DeepResearchDiagnostics, run_deep_research_diagnostics
 from stockbot.research.factory import FactoryReport, ResearchFactory, ResearchFactoryConfig
@@ -185,6 +186,7 @@ def run_snapshot_deep_diagnostics(
     quarantine_config: QuarantineConfig | None = None,
     quarantine_manifest_path: str | Path | None = None,
     quality_report: ResearchDataQualityReport | None = None,
+    point_in_time_universe: PointInTimeUniverse | None = None,
 ) -> DeepResearchDiagnostics:
     """Run holdout-safe deep diagnostics without exposing sealed quarantine data."""
 
@@ -197,4 +199,5 @@ def run_snapshot_deep_diagnostics(
         test_periods=test_periods,
         liquidity_config=liquidity_config,
         capacity_levels=capacity_levels,
+        point_in_time_universe=point_in_time_universe,
     )
