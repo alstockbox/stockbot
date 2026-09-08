@@ -16,6 +16,7 @@ def _bars() -> pd.DataFrame:
     for j, symbol in enumerate(("AAA", "BBB", "CCC", "DDD", "EEE", "FFF")):
         local = market + 0.0005 * np.sin(np.arange(len(dates)) / (8.0 + j)) + rng.normal(0.0, 0.003, len(dates))
         close = 100.0 * np.exp(np.cumsum(local))
+        volume = rng.integers(700_000 + 80_000 * j, 1_400_000 + 120_000 * j, len(dates))
         for i, dt in enumerate(dates):
             rows.append(
                 {
@@ -25,7 +26,7 @@ def _bars() -> pd.DataFrame:
                     "high": float(close[i] * 1.006),
                     "low": float(close[i] * 0.994),
                     "close": float(close[i]),
-                    "volume": int(800_000 + 100_000 * j),
+                    "volume": int(volume[i]),
                 }
             )
     return pd.DataFrame(rows)
