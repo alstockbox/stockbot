@@ -9,6 +9,7 @@ from stockbot.data.schemas import DatasetMetadata
 from stockbot.ml.models import ModelConfig
 from stockbot.research.bootstrap_uncertainty import BootstrapUncertaintyReport, evaluate_block_bootstrap_uncertainty
 from stockbot.research.capacity_curve import CapacityCurveReport, evaluate_capacity_curve
+from stockbot.research.factor_exposure import FactorExposureReport, build_internal_factor_returns, evaluate_factor_exposure
 from stockbot.research.feature_ablation import FeatureAblationReport, evaluate_feature_group_ablation
 from stockbot.research.liquidity_execution import LiquidityExecutionConfig, LiquidityExecutionReport, simulate_liquidity_aware_execution
 from stockbot.research.policy_search import PolicyArenaReport, evaluate_policy_arena
@@ -23,6 +24,7 @@ class CandidateDeepDiagnostics:
     model_name: str
     policy_arena: PolicyArenaReport
     bootstrap_uncertainty: BootstrapUncertaintyReport
+    factor_exposure: FactorExposureReport
     liquidity_execution: LiquidityExecutionReport
     capacity_curve: CapacityCurveReport
     window_robustness: WindowRobustnessReport
@@ -128,6 +130,7 @@ def run_deep_research_diagnostics(
     """Run expensive diagnostics only on top generalists and only before blind holdout."""
 
     research_bars = _research_partition(bars, getattr(factory_report, "holdout_start", None))
+    factor_returns = build_internal_factor_returns(research_bars)
     selected = select_deep_diagnostic_candidates(
         factory_report.candidates,
         top_k_per_horizon=top_k_per_horizon,
@@ -151,6 +154,7 @@ def run_deep_research_diagnostics(
             samples=bootstrap_samples,
             confidence_level=bootstrap_confidence_level,
         )
+        factor_exposure = evaluate_factor_exposure(policy.best.net_returns, factor_returns)
         if candidate.result.predictions is None:
             raise ValueError("deep diagnostics require retained OOS predictions")
         liquidity = simulate_liquidity_aware_execution(
@@ -192,6 +196,7 @@ def run_deep_research_diagnostics(
             model_name=candidate.model_name,
             policy_arena=policy,
             bootstrap_uncertainty=bootstrap,
+            factor_exposure=factor_exposure,
             liquidity_execution=liquidity,
             capacity_curve=capacity_curve,
             window_robustness=windows,
@@ -271,6 +276,17 @@ def compact_deep_diagnostics(diagnostics: DeepResearchDiagnostics) -> dict[str, 
                     "median": item.bootstrap_uncertainty.max_drawdown.median,
                     "upper": item.bootstrap_uncertainty.max_drawdown.upper,
                 },
+            },
+            "factor_exposure": {
+                "factor_betas": dict(item.factor_exposure.factor_betas),
+                "daily_alpha": item.factor_exposure.daily_alpha,
+                "annualized_alpha": item.factor_exposure.annualized_alpha,
+                "r_squared": item.factor_exposure.r_squared,
+                "explained_fraction": item.factor_exposure.explained_fraction,
+                "idiosyncratic_score": item.factor_exposure.idiosyncratic_score,
+                "residual_sharpe": item.factor_exposure.residual_metrics.get("sharpe", 0.0),
+                "residual_cagr": item.factor_exposure.residual_metrics.get("cagr", 0.0),
+                "observations": item.factor_exposure.observations,
             },
             "liquidity_execution": {
                 "score": item.liquidity_execution.score,
