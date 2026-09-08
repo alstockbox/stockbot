@@ -179,6 +179,42 @@ python scripts/run_market_training.py \
   --factory-regime-specialists
 ```
 
-Each run can write `job.json` before research begins and `summary.json` after it completes. The summary includes experiment counts, promotion status, active champion, horizon-ensemble score and optional regime-specialist/router scores. This is intended as the persistence contract for a future scheduler/queue rather than as a live execution service.
+Each run can write `job.json` before research begins and `summary.json` after it completes. Job identity binds the market snapshot, sealed-quarantine boundary, point-in-time auxiliary-data fingerprint, selected auxiliary features and historical-universe fingerprint. The summary includes experiment counts, promotion status, active champion, horizon-ensemble score and optional regime-specialist/router scores. This is intended as the persistence contract for a future scheduler/queue rather than as a live execution service.
 
-No backtest, model score, statistical test, paper-readiness status or champion status guarantees future returns.
+## V2.2: deep diagnostics and point-in-time external signals
+
+The research stack can now retain and replay the exact feature contract used by each candidate. Expensive diagnostics are restricted to the pre-holdout research partition and include policy search, moving-block bootstrap uncertainty, factor attribution, liquidity/market-impact simulation, capital-capacity curves, multi-window robustness, feature-group ablation, OOS stacking and optional point-in-time sector/factor neutralization.
+
+External fundamentals, macro, news, sentiment, short-interest, insider and alternative-data signals enter through `PointInTimeFeatureStore`. Every observation requires both an economic/event `observation_time` and the earliest strategy-usable `available_time`. Missing publication timing is rejected rather than guessed. Research-input files are fingerprinted and verified on reload, so changed revisions create a different research identity.
+
+### Riksbank historical macro vintages
+
+StockBot includes a fail-closed adapter for Sveriges Riksbank Monetary Policy Data API. The initial stable feature set includes policy rate, CPIF, CPI, calendar-adjusted GDP growth, unemployment and the KIX exchange-rate index. The historical-vintage collector replays policy rounds from 2020 onward. V1 of this adapter materializes realised observations only; future forecast targets are intentionally kept out until they have an explicit horizon-aware feature schema.
+
+Build a fingerprinted Riksbank vintage store:
+
+```bash
+python scripts/build_riksbank_macro_store.py \
+  --output research_inputs/riksbank_macro.json \
+  --series policy_rate,cpif_yoy,gdp_yoy_ca,unemployment_rate,kix_index \
+  --start-year 2020
+```
+
+Then pass it into the factory:
+
+```bash
+python scripts/run_market_training.py \
+  --provider tiingo \
+  --symbols AAPL,MSFT,NVDA,AMZN,META,GOOGL,SPY,QQQ \
+  --start 2014-01-01 \
+  --end 2026-09-01 \
+  --snapshot-root snapshots \
+  --factory \
+  --factory-auxiliary-input research_inputs/riksbank_macro.json \
+  --factory-auxiliary-features policy_rate,cpif_yoy,gdp_yoy_ca,unemployment_rate,kix_index \
+  --factory-deep-diagnostics
+```
+
+When a candidate actually uses `aux__*` features, Deep Research additionally runs auxiliary ablation: full external-signal stack versus no external data and per-feature leave-one-out tests. These diagnostics report aggregate external-data contribution, useful features and potentially harmful features. They remain diagnostics and do not replace blind holdout, sealed quarantine or forward paper evidence.
+
+No backtest, model score, statistical test, paper-readiness status, champion status or auxiliary-data result guarantees future returns.
