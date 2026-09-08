@@ -1,0 +1,120 @@
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+import hashlib
+import json
+from pathlib import Path
+from typing import Any, Iterable
+
+from stockbot.ml.models import ModelConfig
+
+
+@dataclass(frozen=True)
+class ExperimentRecord:
+    experiment_id: str
+    model_name: str
+    model_params: dict[str, Any]
+    seed: int
+    dataset_fingerprint: str
+    horizon: int
+    factory_score: float
+    base_score: float
+    robustness: float
+    oos_coverage: float
+    metrics: dict[str, float]
+    passed_gates: bool
+    rejection_reasons: tuple[str, ...]
+    created_at: str
+
+
+def experiment_id(
+    model: ModelConfig,
+    *,
+    dataset_fingerprint: str,
+    horizon: int,
+) -> str:
+    payload = {
+        "name": model.name,
+        "params": dict(sorted(dict(model.params).items())),
+        "seed": int(model.seed),
+        "dataset_fingerprint": dataset_fingerprint,
+        "horizon": int(horizon),
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:24]
+
+
+def make_record(
+    model: ModelConfig,
+    *,
+    dataset_fingerprint: str,
+    horizon: int,
+    factory_score: float,
+    base_score: float,
+    robustness: float,
+    oos_coverage: float,
+    metrics: dict[str, float],
+    passed_gates: bool,
+    rejection_reasons: Iterable[str] = (),
+) -> ExperimentRecord:
+    return ExperimentRecord(
+        experiment_id=experiment_id(model, dataset_fingerprint=dataset_fingerprint, horizon=horizon),
+        model_name=model.name,
+        model_params=dict(model.params),
+        seed=int(model.seed),
+        dataset_fingerprint=str(dataset_fingerprint),
+        horizon=int(horizon),
+        factory_score=float(factory_score),
+        base_score=float(base_score),
+        robustness=float(robustness),
+        oos_coverage=float(oos_coverage),
+        metrics={key: float(value) for key, value in metrics.items()},
+        passed_gates=bool(passed_gates),
+        rejection_reasons=tuple(str(reason) for reason in rejection_reasons),
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+class JsonlExperimentMemory:
+    """Append-only research memory.
+
+    JSONL keeps the first implementation dependency-free and auditable. A later
+    database adapter can implement the same append/records/best interface.
+    """
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path)
+
+    def append(self, record: ExperimentRecord) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        payload = asdict(record)
+        payload["rejection_reasons"] = list(record.rejection_reasons)
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, sort_keys=True, default=str) + "\n")
+
+    def records(self) -> list[ExperimentRecord]:
+        if not self.path.exists():
+            return []
+        rows: list[ExperimentRecord] = []
+        with self.path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                payload = json.loads(line)
+                payload["rejection_reasons"] = tuple(payload.get("rejection_reasons", ()))
+                rows.append(ExperimentRecord(**payload))
+        return rows
+
+    def seen(self, experiment_id_value: str) -> bool:
+        return any(row.experiment_id == experiment_id_value for row in self.records())
+
+    def best(self, *, only_passed: bool = True, limit: int = 20) -> list[ExperimentRecord]:
+        if limit <= 0:
+            return []
+        rows = self.records()
+        if only_passed:
+            rows = [row for row in rows if row.passed_gates]
+        rows.sort(key=lambda row: row.factory_score, reverse=True)
+        return rows[:limit]
