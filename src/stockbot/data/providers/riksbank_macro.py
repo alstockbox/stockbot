@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from urllib.parse import urlencode
 
 import pandas as pd
@@ -66,7 +67,7 @@ def _first(mapping: dict, keys: tuple[str, ...]):
     return None
 
 
-def _utc_iso(value, *, label: str) -> str:
+def _utc_timestamp(value, *, label: str) -> pd.Timestamp:
     try:
         timestamp = pd.Timestamp(value)
     except Exception as exc:
@@ -74,10 +75,8 @@ def _utc_iso(value, *, label: str) -> str:
     if pd.isna(timestamp):
         raise ProviderError(f"Riksbank returned invalid {label}")
     if timestamp.tzinfo is None:
-        timestamp = timestamp.tz_localize("UTC")
-    else:
-        timestamp = timestamp.tz_convert("UTC")
-    return timestamp.isoformat()
+        return timestamp.tz_localize("UTC")
+    return timestamp.tz_convert("UTC")
 
 
 def _rows_from_payload(payload) -> tuple[list[dict], dict]:
@@ -93,7 +92,6 @@ def _rows_from_payload(payload) -> tuple[list[dict], dict]:
                 rows = candidate
                 break
         if rows is None:
-            # A single row is accepted only when it already has a value and a date.
             if _first(payload, _VALUE_KEYS) is not None and _first(payload, _DATE_KEYS) is not None:
                 rows = [payload]
             else:
@@ -113,8 +111,9 @@ class RiksbankMonetaryPolicyProvider:
 
     The provider deliberately refuses to infer publication time. A row is converted to
     a StockBot auxiliary observation only when a cutoff/publication timestamp is present
-    either on the row itself or in response-level metadata. This preserves causal
-    `available_time` semantics for historical-vintage research.
+    either on the row itself or in response-level metadata. V1 materializes realised
+    observations only; future forecast targets are skipped until they have an explicit
+    horizon-aware feature schema.
     """
 
     name = "riksbank-monetary-policy"
@@ -157,6 +156,7 @@ class RiksbankMonetaryPolicyProvider:
         feature_name: str,
         series_id: str,
         kind: AuxiliaryFeatureKind = AuxiliaryFeatureKind.MACRO,
+        realised_only: bool = True,
     ) -> tuple[PointInTimeFeatureObservation, ...]:
         feature = str(feature_name or "").strip()
         series = str(series_id or "").strip()
@@ -183,42 +183,39 @@ class RiksbankMonetaryPolicyProvider:
                 value = float(raw_value)
             except (TypeError, ValueError) as exc:
                 raise ProviderError("Riksbank monetary-policy value is not numeric") from exc
-            if not pd.notna(value):
+            if not math.isfinite(value):
                 raise ProviderError("Riksbank monetary-policy value is not finite")
 
-            observation_time = _utc_iso(raw_date, label="observation date")
-            available_time = _utc_iso(raw_available, label="cutoff/publication date")
-            if pd.Timestamp(available_time) < pd.Timestamp(observation_time):
-                # This can be legitimate for forecasts of future periods. StockBot's
-                # generic point-in-time store requires available >= observation, so for
-                # forecast vintages the economic observation timestamp is anchored to
-                # the publication time while the original target period is retained in
-                # revision_id. Outcome rows normally keep their natural period date.
-                target_period = observation_time
-                observation_time = available_time
-                revision_suffix = f"target={target_period}"
-            else:
-                revision_suffix = None
+            observation_time = _utc_timestamp(raw_date, label="observation date")
+            available_time = _utc_timestamp(raw_available, label="cutoff/publication date")
+            is_future_target = observation_time > available_time
+            if is_future_target and realised_only:
+                continue
+            if is_future_target:
+                raise ProviderError(
+                    "future Riksbank forecast rows require an explicit horizon-aware feature schema"
+                )
 
             round_name = _first(row, _ROUND_KEYS) or metadata_round
             revision_parts = [f"series={series}"]
             if round_name is not None:
                 revision_parts.append(f"round={round_name}")
-            if revision_suffix is not None:
-                revision_parts.append(revision_suffix)
 
             output.append(
                 PointInTimeFeatureObservation(
                     feature_name=feature,
                     value=value,
-                    observation_time=observation_time,
-                    available_time=available_time,
+                    observation_time=observation_time.isoformat(),
+                    available_time=available_time.isoformat(),
                     source=self.name,
                     kind=kind,
                     symbol=None,
                     revision_id="|".join(revision_parts),
                 )
             )
+
+        if not output:
+            raise ProviderError("Riksbank payload contained no realised rows usable by the strategy")
         return tuple(output)
 
     def fetch_feature(
