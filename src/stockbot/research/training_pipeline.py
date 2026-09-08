@@ -8,6 +8,7 @@ import pandas as pd
 from stockbot.arena.experiments import ExperimentConfig, ModelExperimentResult, run_model_experiment
 from stockbot.arena.leaderboard import eligible_for_promotion, rank_experiments
 from stockbot.data.panel import build_panel
+from stockbot.data.point_in_time_features import PointInTimeFeatureStore
 from stockbot.data.schemas import DataGrade, DatasetMetadata
 from stockbot.features.cross_sectional import add_cross_sectional_features
 from stockbot.ml.labels import make_panel_labels
@@ -72,6 +73,7 @@ class TrainingRun:
     data_grade: DataGrade
     dataset_fingerprint: str
     horizon: int
+    auxiliary_features: tuple[str, ...] = ()
 
 
 def run_training_research(
@@ -84,6 +86,10 @@ def run_training_research(
     train_periods: int | None = None,
     test_periods: int | None = None,
     feature_columns: tuple[str, ...] | list[str] | None = None,
+    auxiliary_store: PointInTimeFeatureStore | None = None,
+    auxiliary_feature_names: tuple[str, ...] | list[str] | None = None,
+    auxiliary_max_age_days: int | None = None,
+    auxiliary_min_coverage: float = 0.80,
 ) -> TrainingRun:
     if horizon <= 0:
         raise ValueError("horizon must be positive")
@@ -93,10 +99,47 @@ def run_training_research(
         raise ValueError("train_periods must be positive")
     if test_periods is not None and test_periods <= 0:
         raise ValueError("test_periods must be positive")
+    if not 0.0 < auxiliary_min_coverage <= 1.0:
+        raise ValueError("auxiliary_min_coverage must be in (0,1]")
+    if auxiliary_store is None and auxiliary_feature_names is not None:
+        raise ValueError("auxiliary_feature_names require a PointInTimeFeatureStore")
 
     panel = build_panel(bars)
     all_features = add_cross_sectional_features(panel)
-    selected_features = tuple(feature_columns) if feature_columns is not None else FEATURE_COLUMNS
+    auxiliary_columns: tuple[str, ...] = ()
+    if auxiliary_store is not None:
+        requested = (
+            auxiliary_store.feature_names
+            if auxiliary_feature_names is None
+            else tuple(str(value).strip() for value in auxiliary_feature_names)
+        )
+        coverage = auxiliary_store.coverage_for_index(
+            panel.index,
+            feature_names=requested,
+            max_age_days=auxiliary_max_age_days,
+            min_coverage=auxiliary_min_coverage,
+        )
+        if not coverage.research_grade_auxiliary:
+            raise ValueError(
+                "auxiliary point-in-time feature gate failed: " + ",".join(coverage.reasons)
+            )
+        auxiliary = auxiliary_store.materialize(
+            panel.index,
+            feature_names=requested,
+            max_age_days=auxiliary_max_age_days,
+        )
+        auxiliary = auxiliary.rename(columns={column: f"aux__{column}" for column in auxiliary.columns})
+        collisions = sorted(set(auxiliary.columns).intersection(all_features.columns))
+        if collisions:
+            raise ValueError(f"auxiliary feature name collision: {collisions}")
+        all_features = pd.concat([all_features, auxiliary], axis=1)
+        auxiliary_columns = tuple(auxiliary.columns)
+
+    selected_features = (
+        tuple(feature_columns)
+        if feature_columns is not None
+        else FEATURE_COLUMNS + auxiliary_columns
+    )
     if not selected_features:
         raise ValueError("at least one feature column is required")
     missing_features = sorted(set(selected_features).difference(all_features.columns))
@@ -134,4 +177,11 @@ def run_training_research(
     leaderboard = rank_experiments(results)
     champion = next((row for row in leaderboard if eligible_for_promotion(row, metadata)), None)
     fingerprint = leaderboard[0].artifact.dataset_fingerprint if leaderboard else ""
-    return TrainingRun(leaderboard, champion, metadata.grade, fingerprint, horizon)
+    return TrainingRun(
+        leaderboard,
+        champion,
+        metadata.grade,
+        fingerprint,
+        horizon,
+        auxiliary_features=auxiliary_columns,
+    )
