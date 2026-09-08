@@ -9,6 +9,10 @@ from stockbot.data.download import DownloadError, download_market_snapshot
 from stockbot.data.providers.http import ProviderError
 from stockbot.data.providers.tiingo import TiingoProvider
 from stockbot.data.providers.yahoo_bootstrap import YahooBootstrapProvider
+from stockbot.data.research_inputs import (
+    load_point_in_time_feature_store,
+    load_point_in_time_universe,
+)
 from stockbot.data.snapshots import SnapshotStore
 from stockbot.research.deep_diagnostics import compact_deep_diagnostics
 from stockbot.research.factory import ResearchFactoryConfig
@@ -44,6 +48,33 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--factory-workers", type=int, default=4, help="Parallel challenger workers used by V2")
     parser.add_argument("--factory-memory", default="research_memory/experiments.jsonl", help="Append-only research-memory JSONL path")
     parser.add_argument("--factory-run-dir", default=None, help="Optional directory for scheduler-friendly job manifest and research artifacts")
+    parser.add_argument(
+        "--factory-auxiliary-input",
+        default=None,
+        help="Fingerprint-verified StockBot point-in-time auxiliary feature artifact",
+    )
+    parser.add_argument(
+        "--factory-auxiliary-features",
+        default=None,
+        help="Optional comma-separated subset of auxiliary feature names",
+    )
+    parser.add_argument(
+        "--factory-auxiliary-max-age-days",
+        type=int,
+        default=None,
+        help="Optional maximum age in days for point-in-time auxiliary observations",
+    )
+    parser.add_argument(
+        "--factory-auxiliary-min-coverage",
+        type=float,
+        default=0.80,
+        help="Minimum materialized auxiliary feature-cell coverage required for research",
+    )
+    parser.add_argument(
+        "--factory-universe-input",
+        default=None,
+        help="Fingerprint-verified StockBot point-in-time universe artifact used by neutralization/data controls",
+    )
     parser.add_argument(
         "--factory-quarantine-start",
         default=None,
@@ -94,6 +125,17 @@ def resolve_provider(name: str):
 
 def _parse_symbols(value: str) -> list[str]:
     return [item.strip().upper() for item in value.split(",") if item.strip()]
+
+
+def _parse_names(value: str | None, label: str) -> tuple[str, ...] | None:
+    if value is None:
+        return None
+    parsed = tuple(item.strip() for item in value.split(",") if item.strip())
+    if not parsed:
+        raise ValueError(f"{label} cannot be empty")
+    if len(set(parsed)) != len(parsed):
+        raise ValueError(f"{label} must be unique")
+    return parsed
 
 
 def _parse_positive_ints(value: str, label: str) -> tuple[int, ...]:
@@ -153,6 +195,7 @@ def run_from_args(args: argparse.Namespace) -> int:
         horizons = _parse_horizons(args.factory_horizons)
         train_windows = _parse_positive_ints(args.factory_train_windows, "factory train windows")
         capital_levels = _parse_positive_floats(args.factory_diagnostic_capital_grid, "factory diagnostic capital grid")
+        auxiliary_feature_names = _parse_names(args.factory_auxiliary_features, "factory auxiliary features")
         if args.factory_specialists_top_k <= 0:
             raise ValueError("factory specialists top-k must be positive")
         if args.factory_deep_top_k <= 0:
@@ -173,6 +216,27 @@ def run_from_args(args: argparse.Namespace) -> int:
             raise ValueError("factory diagnostic ADV window must be positive")
         if args.factory_quarantine_min_development_periods <= 0 or args.factory_quarantine_min_periods <= 0:
             raise ValueError("factory quarantine period requirements must be positive")
+        if args.factory_auxiliary_max_age_days is not None and args.factory_auxiliary_max_age_days < 0:
+            raise ValueError("factory auxiliary max age days cannot be negative")
+        if not 0.0 < args.factory_auxiliary_min_coverage <= 1.0:
+            raise ValueError("factory auxiliary minimum coverage must be in (0,1]")
+        if auxiliary_feature_names is not None and not args.factory_auxiliary_input:
+            raise ValueError("factory auxiliary features require --factory-auxiliary-input")
+
+        auxiliary_store = (
+            None
+            if not args.factory_auxiliary_input
+            else load_point_in_time_feature_store(args.factory_auxiliary_input)
+        )
+        point_in_time_universe = (
+            None
+            if not args.factory_universe_input
+            else load_point_in_time_universe(args.factory_universe_input)
+        )
+        if auxiliary_store is not None and auxiliary_feature_names is not None:
+            missing_auxiliary = sorted(set(auxiliary_feature_names).difference(auxiliary_store.feature_names))
+            if missing_auxiliary:
+                raise ValueError(f"unknown requested auxiliary features: {missing_auxiliary}")
 
         quarantine_config = None
         quarantine_manifest_path = None
@@ -184,6 +248,15 @@ def run_from_args(args: argparse.Namespace) -> int:
             )
             quarantine_manifest_path = Path(args.factory_memory).with_suffix(".quarantine.json")
 
+        selected_auxiliary_names = (
+            ()
+            if auxiliary_store is None
+            else (
+                auxiliary_store.feature_names
+                if auxiliary_feature_names is None
+                else auxiliary_feature_names
+            )
+        )
         config = ResearchFactoryConfig(
             horizons=horizons,
             population=ModelPopulationConfig(max_candidates=args.factory_candidates),
@@ -197,6 +270,11 @@ def run_from_args(args: argparse.Namespace) -> int:
             max_workers=args.factory_workers,
             memory_path=args.factory_memory,
             quarantine_start=(None if quarantine_config is None else quarantine_config.start),
+            auxiliary_fingerprint=(None if auxiliary_store is None else auxiliary_store.fingerprint),
+            auxiliary_features=selected_auxiliary_names,
+            universe_fingerprint=(
+                None if point_in_time_universe is None else point_in_time_universe.fingerprint
+            ),
         )
         run_dir = None
         if args.factory_run_dir:
@@ -209,6 +287,10 @@ def run_from_args(args: argparse.Namespace) -> int:
             memory_path=args.factory_memory,
             quarantine_config=quarantine_config,
             quarantine_manifest_path=quarantine_manifest_path,
+            auxiliary_store=auxiliary_store,
+            auxiliary_feature_names=auxiliary_feature_names,
+            auxiliary_max_age_days=args.factory_auxiliary_max_age_days,
+            auxiliary_min_coverage=args.factory_auxiliary_min_coverage,
         )
 
         specialist_diagnostics = None
@@ -219,6 +301,10 @@ def run_from_args(args: argparse.Namespace) -> int:
                 top_k_per_horizon=args.factory_specialists_top_k,
                 quarantine_config=quarantine_config,
                 quarantine_manifest_path=quarantine_manifest_path,
+                auxiliary_store=auxiliary_store,
+                auxiliary_feature_names=auxiliary_feature_names,
+                auxiliary_max_age_days=args.factory_auxiliary_max_age_days,
+                auxiliary_min_coverage=args.factory_auxiliary_min_coverage,
             )
 
         deep_diagnostics = None
@@ -241,6 +327,11 @@ def run_from_args(args: argparse.Namespace) -> int:
                 capacity_levels=capital_levels,
                 quarantine_config=quarantine_config,
                 quarantine_manifest_path=quarantine_manifest_path,
+                point_in_time_universe=point_in_time_universe,
+                auxiliary_store=auxiliary_store,
+                auxiliary_feature_names=auxiliary_feature_names,
+                auxiliary_max_age_days=args.factory_auxiliary_max_age_days,
+                auxiliary_min_coverage=args.factory_auxiliary_min_coverage,
             )
 
         quarantine_manifest = None
@@ -260,6 +351,11 @@ def run_from_args(args: argparse.Namespace) -> int:
         print(f"  promotion_candidates={report.candidates_passed}")
         print(f"  holdout_evaluated={report.holdout_evaluated}")
         print(f"  holdout_start={report.holdout_start}")
+        if auxiliary_store is not None:
+            print(f"  auxiliary_fingerprint={auxiliary_store.fingerprint}")
+            print("  auxiliary_features=" + ",".join(selected_auxiliary_names))
+        if point_in_time_universe is not None:
+            print(f"  universe_fingerprint={point_in_time_universe.fingerprint}")
         if quarantine_manifest is not None:
             print(f"  quarantine_id={quarantine_manifest.quarantine_id}")
             print(f"  quarantine_start={quarantine_manifest.start}")
@@ -319,8 +415,19 @@ def run_from_args(args: argparse.Namespace) -> int:
                 factor = diagnostic.factor_exposure
                 liquidity = diagnostic.liquidity_execution
                 capacity = diagnostic.capacity_curve
+                neutral = diagnostic.neutralization
                 max_capacity = "none" if capacity.max_effective_capital is None else f"{capacity.max_effective_capital:.0f}"
                 first_break = "none" if capacity.first_break_capital is None else f"{capacity.first_break_capital:.0f}"
+                neutral_text = (
+                    "neutralization=none"
+                    if neutral is None
+                    else (
+                        f"neutral_score={neutral.neutralized_score:.6f} "
+                        f"neutral_delta={neutral.score_delta:.6f} "
+                        f"sector_bias={neutral.average_abs_sector_mean_before:.6f}->"
+                        f"{neutral.average_abs_sector_mean_after:.6f}"
+                    )
+                )
                 print(
                     f"deep={experiment_id} h={diagnostic.horizon} model={diagnostic.model_name} "
                     f"policy={best_policy.policy.top_fraction:.2f}/{best_policy.policy.weighting} "
@@ -330,7 +437,8 @@ def run_from_args(args: argparse.Namespace) -> int:
                     f"factor_r2={factor.r_squared:.3f} idio={factor.idiosyncratic_score:.3f} "
                     f"liquidity_score={liquidity.score:.6f} partial_fill={liquidity.partial_fill_fraction:.3f} "
                     f"tracking={liquidity.average_tracking_error:.3f} capacity_score={capacity.capacity_score:.3f} "
-                    f"max_capacity={max_capacity} first_break={first_break} window_score={diagnostic.window_robustness.score:.3f} "
+                    f"max_capacity={max_capacity} first_break={first_break} {neutral_text} "
+                    f"window_score={diagnostic.window_robustness.score:.3f} "
                     f"drop_groups={','.join(diagnostic.feature_ablation.recommended_drop_groups) or 'none'}"
                 )
             for horizon, stacking in sorted(deep_diagnostics.stacking_reports.items()):
@@ -353,6 +461,6 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     try:
         return run_from_args(args)
-    except (ProviderError, DownloadError, ValueError) as exc:
+    except (ProviderError, DownloadError, ValueError, FileNotFoundError, json.JSONDecodeError) as exc:
         parser.error(str(exc))
     return 2
