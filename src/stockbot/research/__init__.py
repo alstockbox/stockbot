@@ -15,6 +15,7 @@ from stockbot.research.jobs import ResearchJobManifest, ResearchRunSummary, make
 from stockbot.research.market_training import run_snapshot_deep_diagnostics, run_snapshot_factory, run_snapshot_regime_specialists, train_snapshot
 from stockbot.research.memory import ExperimentRecord, JsonlExperimentMemory
 from stockbot.research.multiple_testing import DiscoveryResult, benjamini_hochberg, evaluate_discoveries
+from stockbot.research.neutralization import NeutralizationConfig, NeutralizationReport, evaluate_sector_factor_neutralization
 from stockbot.research.objective import ObjectiveWeights, risk_adjusted_objective
 from stockbot.research.policy_search import PolicyArenaReport, PolicyResult, PortfolioPolicy, evaluate_policy_arena
 from stockbot.research.population import ModelPopulationConfig, generate_model_population
@@ -67,6 +68,8 @@ __all__ = [
     "JsonChampionStore",
     "JsonlExperimentMemory",
     "ModelPopulationConfig",
+    "NeutralizationConfig",
+    "NeutralizationReport",
     "ObjectiveWeights",
     "PaperReadinessReport",
     "PolicyArenaReport",
@@ -111,6 +114,7 @@ __all__ = [
     "evaluate_regime_performance",
     "evaluate_research_gate",
     "evaluate_return_drift",
+    "evaluate_sector_factor_neutralization",
     "evaluate_stress_suite",
     "evaluate_training_window_robustness",
     "freeze_strategy_spec",
