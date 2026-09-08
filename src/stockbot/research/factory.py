@@ -6,6 +6,7 @@ from typing import Any
 import pandas as pd
 
 from stockbot.arena.experiments import ModelExperimentResult
+from stockbot.data.point_in_time_features import PointInTimeFeatureStore
 from stockbot.data.schemas import DataGrade, DatasetMetadata
 from stockbot.ml.models import ModelConfig
 from stockbot.research.champion import ChampionState, JsonChampionStore, make_champion_state
@@ -103,6 +104,7 @@ class FactoryReport:
     candidates_passed: int
     holdout_evaluated: int
     holdout_start: pd.Timestamp | None
+    auxiliary_features: tuple[str, ...] = ()
 
 
 class ResearchFactory:
@@ -288,6 +290,10 @@ class ResearchFactory:
         candidates: list[FactoryCandidate],
         *,
         holdout_start: pd.Timestamp,
+        auxiliary_store: PointInTimeFeatureStore | None = None,
+        auxiliary_feature_names: tuple[str, ...] | list[str] | None = None,
+        auxiliary_max_age_days: int | None = None,
+        auxiliary_min_coverage: float = 0.80,
     ) -> tuple[list[FactoryCandidate], int]:
         selected: list[FactoryCandidate] = []
         for horizon in self.config.horizons:
@@ -306,6 +312,12 @@ class ResearchFactory:
                 params=dict(candidate.model_params),
                 seed=candidate.seed,
             )
+            feature_names = tuple(str(value) for value in candidate.result.artifact.feature_names)
+            uses_auxiliary = any(name.startswith("aux__") for name in feature_names)
+            if uses_auxiliary and auxiliary_store is None:
+                raise ValueError(
+                    "blind holdout cannot replay auxiliary-feature candidate without its PointInTimeFeatureStore"
+                )
             report = evaluate_blind_holdout(
                 bars,
                 model,
@@ -313,6 +325,11 @@ class ResearchFactory:
                 holdout_start=holdout_start,
                 config=self.config.holdout,
                 objective=self.config.objective,
+                feature_columns=feature_names,
+                auxiliary_store=(auxiliary_store if uses_auxiliary else None),
+                auxiliary_feature_names=(auxiliary_feature_names if uses_auxiliary else None),
+                auxiliary_max_age_days=auxiliary_max_age_days,
+                auxiliary_min_coverage=auxiliary_min_coverage,
             )
             promotion_score = 0.70 * candidate.selection_score + 0.30 * report.score
             replacements[candidate.experiment_id] = replace(
@@ -402,7 +419,16 @@ class ResearchFactory:
             temperature=self.config.ensemble_temperature,
         )
 
-    def run(self, bars: pd.DataFrame, metadata: DatasetMetadata) -> FactoryReport:
+    def run(
+        self,
+        bars: pd.DataFrame,
+        metadata: DatasetMetadata,
+        *,
+        auxiliary_store: PointInTimeFeatureStore | None = None,
+        auxiliary_feature_names: tuple[str, ...] | list[str] | None = None,
+        auxiliary_max_age_days: int | None = None,
+        auxiliary_min_coverage: float = 0.80,
+    ) -> FactoryReport:
         incumbent = self.champion_store.load() if self.champion_store is not None else None
 
         holdout_start: pd.Timestamp | None = None
@@ -412,6 +438,7 @@ class ResearchFactory:
 
         population = generate_model_population(self.config.population)
         candidates: list[FactoryCandidate] = []
+        auxiliary_features: tuple[str, ...] = ()
 
         for horizon in self.config.horizons:
             training_run = run_training_research(
@@ -420,7 +447,13 @@ class ResearchFactory:
                 model_configs=population,
                 horizon=horizon,
                 max_workers=self.config.max_workers,
+                auxiliary_store=auxiliary_store,
+                auxiliary_feature_names=auxiliary_feature_names,
+                auxiliary_max_age_days=auxiliary_max_age_days,
+                auxiliary_min_coverage=auxiliary_min_coverage,
             )
+            if training_run.auxiliary_features:
+                auxiliary_features = training_run.auxiliary_features
             candidates.extend(
                 self._candidate(result, metadata, horizon=horizon)
                 for result in training_run.leaderboard
@@ -435,6 +468,10 @@ class ResearchFactory:
                 bars,
                 candidates,
                 holdout_start=holdout_start,
+                auxiliary_store=auxiliary_store,
+                auxiliary_feature_names=auxiliary_feature_names,
+                auxiliary_max_age_days=auxiliary_max_age_days,
+                auxiliary_min_coverage=auxiliary_min_coverage,
             )
 
         candidates = self._apply_paper_readiness(candidates)
@@ -484,4 +521,5 @@ class ResearchFactory:
             candidates_passed=len(promotion_pool),
             holdout_evaluated=holdout_evaluated,
             holdout_start=holdout_start,
+            auxiliary_features=auxiliary_features,
         )
