@@ -66,6 +66,10 @@ def test_research_factory_runs_population_stress_holdout_and_champion(tmp_path):
         holdout_top_k=2,
         promotion_margin=0.0,
         max_workers=2,
+        require_statistical_discovery=False,
+        min_regime_score=0.0,
+        min_regime_coverage=0.0,
+        reject_drifted_candidates=False,
     )
     memory = JsonlExperimentMemory(tmp_path / "experiments.jsonl")
     champion_store = JsonChampionStore(tmp_path / "champion.json")
@@ -81,11 +85,15 @@ def test_research_factory_runs_population_stress_holdout_and_champion(tmp_path):
     assert report.experiments_run == 5
     assert len(report.candidates) == 5
     assert all(candidate.stress_report is not None for candidate in report.candidates)
+    assert all(candidate.regime_report is not None for candidate in report.candidates)
+    assert all(candidate.discovery is not None for candidate in report.candidates)
+    assert all(candidate.drift_report is not None for candidate in report.candidates)
     assert report.holdout_start is not None
     assert report.holdout_evaluated == 2
     assert report.candidates_passed >= 1
     assert report.promotion_occurred
     assert report.champion_candidate is not None
     assert report.active_champion is not None
+    assert report.ensemble_report is not None
     assert champion_store.load() == report.active_champion
     assert len(memory.records()) == 5
