@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from stockbot.data.market_schema import validate_canonical_bars
+from stockbot.data.research_quality import ResearchDataQualityReport, verified_data_grade
 from stockbot.data.schemas import DatasetMetadata
 from stockbot.data.snapshots import MarketSnapshot
 from stockbot.research.champion import JsonChampionStore
@@ -46,11 +47,22 @@ def prepare_training_bars(canonical_bars: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
-def _snapshot_metadata(snapshot: MarketSnapshot) -> DatasetMetadata:
+def _snapshot_metadata(
+    snapshot: MarketSnapshot,
+    quality_report: ResearchDataQualityReport | None = None,
+) -> DatasetMetadata:
+    """Create training metadata with fail-closed research-grade verification.
+
+    A snapshot that merely declares ``RESEARCH_GRADE`` is downgraded to ``BOOTSTRAP``
+    unless an explicit quality report proves point-in-time universe coverage, causal
+    retrieval, adjusted-price integrity and corporate-action attestations. Lower grades
+    are never upgraded by this helper.
+    """
+
     return DatasetMetadata(
         name=snapshot.snapshot_id,
         source=snapshot.manifest.provider,
-        grade=snapshot.manifest.grade,
+        grade=verified_data_grade(snapshot.manifest.grade, quality_report),
         version=snapshot.manifest.schema_version,
         created_at=snapshot.manifest.created_at,
     )
@@ -77,10 +89,11 @@ def train_snapshot(
     *,
     quarantine_config: QuarantineConfig | None = None,
     quarantine_manifest_path: str | Path | None = None,
+    quality_report: ResearchDataQualityReport | None = None,
 ) -> TrainingRun:
     return run_training_research(
         _development_bars(snapshot, quarantine_config, quarantine_manifest_path),
-        _snapshot_metadata(snapshot),
+        _snapshot_metadata(snapshot, quality_report),
         model_configs=model_configs,
         horizon=horizon,
     )
@@ -93,8 +106,9 @@ def run_snapshot_factory(
     memory_path: str | None = None,
     quarantine_config: QuarantineConfig | None = None,
     quarantine_manifest_path: str | Path | None = None,
+    quality_report: ResearchDataQualityReport | None = None,
 ) -> FactoryReport:
-    """Run V2 on development data only, evolving challengers from prior memory."""
+    """Run V2 on development data only with verified data-grade semantics."""
 
     memory = JsonlExperimentMemory(memory_path) if memory_path else None
     champion_store = None
@@ -126,7 +140,7 @@ def run_snapshot_factory(
     )
     return factory.run(
         _development_bars(snapshot, quarantine_config, quarantine_manifest_path),
-        _snapshot_metadata(snapshot),
+        _snapshot_metadata(snapshot, quality_report),
     )
 
 
@@ -137,12 +151,13 @@ def run_snapshot_regime_specialists(
     top_k_per_horizon: int = 2,
     quarantine_config: QuarantineConfig | None = None,
     quarantine_manifest_path: str | Path | None = None,
+    quality_report: ResearchDataQualityReport | None = None,
 ) -> RegimeSpecialistDiagnostics:
     """Run regime-specialist diagnostics without exposing sealed quarantine data."""
 
     return run_regime_specialist_diagnostics(
         _development_bars(snapshot, quarantine_config, quarantine_manifest_path),
-        _snapshot_metadata(snapshot),
+        _snapshot_metadata(snapshot, quality_report),
         report.candidates,
         top_k_per_horizon=top_k_per_horizon,
     )
@@ -169,12 +184,13 @@ def run_snapshot_deep_diagnostics(
     ),
     quarantine_config: QuarantineConfig | None = None,
     quarantine_manifest_path: str | Path | None = None,
+    quality_report: ResearchDataQualityReport | None = None,
 ) -> DeepResearchDiagnostics:
     """Run holdout-safe deep diagnostics without exposing sealed quarantine data."""
 
     return run_deep_research_diagnostics(
         _development_bars(snapshot, quarantine_config, quarantine_manifest_path),
-        _snapshot_metadata(snapshot),
+        _snapshot_metadata(snapshot, quality_report),
         report,
         top_k_per_horizon=top_k_per_horizon,
         train_windows=train_windows,
