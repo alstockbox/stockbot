@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+import hashlib
+import json
 
 import pandas as pd
 
@@ -50,6 +52,8 @@ def _utc(value: str | pd.Timestamp) -> pd.Timestamp:
 class PointInTimeUniverse:
     """Historical membership intervals used to avoid today's-universe backtests."""
 
+    SCHEMA_VERSION = 1
+
     def __init__(
         self,
         memberships: list[UniverseMembership] | tuple[UniverseMembership, ...],
@@ -79,6 +83,78 @@ class PointInTimeUniverse:
                 previous_end = previous[1]
                 if previous_end is None or current[0] < previous_end:
                     raise ValueError(f"overlapping universe membership intervals for {symbol}")
+
+    def to_payload(self) -> dict[str, object]:
+        memberships: list[dict[str, object]] = []
+        for row in self.memberships:
+            memberships.append(
+                {
+                    "symbol": row.symbol.strip().upper(),
+                    "effective_from": _utc(row.effective_from).isoformat(),
+                    "effective_to": (
+                        None if row.effective_to is None else _utc(row.effective_to).isoformat()
+                    ),
+                    "exchange": None if row.exchange is None else str(row.exchange).strip(),
+                    "sector": None if row.sector is None else str(row.sector).strip(),
+                    "industry": None if row.industry is None else str(row.industry).strip(),
+                    "delisted": bool(row.delisted),
+                }
+            )
+        memberships.sort(
+            key=lambda item: (
+                str(item["symbol"]),
+                str(item["effective_from"]),
+                "" if item["effective_to"] is None else str(item["effective_to"]),
+            )
+        )
+        return {
+            "schema_version": self.SCHEMA_VERSION,
+            "manifest": asdict(self.manifest),
+            "memberships": memberships,
+        }
+
+    @property
+    def fingerprint(self) -> str:
+        raw = json.dumps(
+            self.to_payload(),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(raw).hexdigest()
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, object]) -> "PointInTimeUniverse":
+        if int(payload.get("schema_version", -1)) != cls.SCHEMA_VERSION:
+            raise ValueError("unsupported point-in-time universe schema version")
+        raw_manifest = payload.get("manifest")
+        raw_memberships = payload.get("memberships")
+        if not isinstance(raw_manifest, dict) or not isinstance(raw_memberships, list):
+            raise ValueError("invalid point-in-time universe payload")
+        manifest = UniverseManifest(
+            source=str(raw_manifest["source"]),
+            survivorship_bias_controlled=bool(raw_manifest["survivorship_bias_controlled"]),
+            includes_delisted_securities=bool(raw_manifest["includes_delisted_securities"]),
+            point_in_time_membership=bool(raw_manifest["point_in_time_membership"]),
+            asof_semantics=str(raw_manifest.get("asof_semantics", "effective_interval")),
+        )
+        memberships: list[UniverseMembership] = []
+        for raw in raw_memberships:
+            if not isinstance(raw, dict):
+                raise ValueError("invalid point-in-time universe membership payload")
+            memberships.append(
+                UniverseMembership(
+                    symbol=str(raw["symbol"]),
+                    effective_from=str(raw["effective_from"]),
+                    effective_to=(
+                        None if raw.get("effective_to") is None else str(raw["effective_to"])
+                    ),
+                    exchange=None if raw.get("exchange") is None else str(raw["exchange"]),
+                    sector=None if raw.get("sector") is None else str(raw["sector"]),
+                    industry=None if raw.get("industry") is None else str(raw["industry"]),
+                    delisted=bool(raw.get("delisted", False)),
+                )
+            )
+        return cls(tuple(memberships), manifest)
 
     def members_at(self, timestamp: str | pd.Timestamp) -> tuple[str, ...]:
         asof = _utc(timestamp)
