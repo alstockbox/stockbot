@@ -134,6 +134,17 @@ def run_snapshot_deep_diagnostics(
     train_windows: tuple[int, ...] = (126, 252, 504),
     test_periods: int = 21,
     liquidity_config: LiquidityExecutionConfig | None = None,
+    capacity_levels: tuple[float, ...] = (
+        10_000.0,
+        25_000.0,
+        50_000.0,
+        100_000.0,
+        250_000.0,
+        500_000.0,
+        1_000_000.0,
+        2_500_000.0,
+        5_000_000.0,
+    ),
 ) -> DeepResearchDiagnostics:
     """Run holdout-safe policy/window/feature/capacity diagnostics from one immutable snapshot."""
 
@@ -145,4 +156,5 @@ def run_snapshot_deep_diagnostics(
         train_windows=train_windows,
         test_periods=test_periods,
         liquidity_config=liquidity_config,
+        capacity_levels=capacity_levels,
     )
