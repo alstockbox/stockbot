@@ -12,6 +12,7 @@ from stockbot.research.gates import GateDecision, ResearchGateCriteria, evaluate
 from stockbot.research.memory import JsonlExperimentMemory, experiment_id, make_record
 from stockbot.research.objective import ObjectiveWeights, risk_adjusted_objective
 from stockbot.research.population import ModelPopulationConfig, generate_model_population
+from stockbot.research.stress import StressReport, evaluate_stress_suite
 from stockbot.research.training_pipeline import run_training_research
 
 
@@ -49,6 +50,8 @@ class FactoryCandidate:
     metrics: dict[str, float]
     robustness: float
     oos_coverage: float
+    stress_score: float
+    stress_report: StressReport | None
     gate: GateDecision
     result: ModelExperimentResult
 
@@ -69,7 +72,8 @@ class ResearchFactory:
     The factory expands the existing V1 training pipeline rather than replacing it.
     Every challenger still uses causal cross-sectional features and purged walk-forward
     OOS evaluation. The factory adds population search, a stronger objective, hard
-    gates, multi-horizon competition, parallel execution and persistent research memory.
+    gates, candidate-specific adversarial stress testing, multi-horizon competition,
+    parallel execution and persistent research memory.
     """
 
     def __init__(
@@ -89,6 +93,17 @@ class ResearchFactory:
             seed=int(result.artifact.seed),
         )
 
+    @staticmethod
+    def _stress(result: ModelExperimentResult) -> StressReport | None:
+        if result.net_returns is None or result.turnover_series is None:
+            return None
+        if len(result.net_returns) == 0:
+            return None
+        return evaluate_stress_suite(
+            result.net_returns,
+            turnover=result.turnover_series,
+        )
+
     def _candidate(
         self,
         result: ModelExperimentResult,
@@ -97,16 +112,20 @@ class ResearchFactory:
         horizon: int,
     ) -> FactoryCandidate:
         model = self._model_from_result(result)
+        stress_report = self._stress(result)
+        stress_score = stress_report.score if stress_report is not None else 0.0
         factory_score = risk_adjusted_objective(
             result.metrics,
             robustness=result.robustness,
             oos_coverage=result.oos_coverage,
+            stress_score=stress_score,
             weights=self.config.objective,
         )
         gate = evaluate_research_gate(
             result,
             metadata,
             factory_score=factory_score,
+            stress_score=stress_score,
             criteria=self.config.gates,
         )
         exp_id = experiment_id(
@@ -125,6 +144,8 @@ class ResearchFactory:
             metrics={key: float(value) for key, value in result.metrics.items()},
             robustness=float(result.robustness),
             oos_coverage=float(result.oos_coverage),
+            stress_score=float(stress_score),
+            stress_report=stress_report,
             gate=gate,
             result=result,
         )
@@ -142,6 +163,7 @@ class ResearchFactory:
                     metrics=result.metrics,
                     passed_gates=gate.passed,
                     rejection_reasons=gate.reasons,
+                    stress_score=stress_score,
                 )
             )
         return candidate
