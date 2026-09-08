@@ -5,6 +5,7 @@ from stockbot.research.champion import ChampionState, JsonChampionStore
 from stockbot.research.deep_diagnostics import CandidateDeepDiagnostics, DeepResearchDiagnostics, compact_deep_diagnostics, run_deep_research_diagnostics
 from stockbot.research.drift import DriftReport, evaluate_return_drift
 from stockbot.research.ensemble import EnsembleReport, build_horizon_ensemble
+from stockbot.research.factor_exposure import FactorExposureReport, build_internal_factor_returns, evaluate_factor_exposure
 from stockbot.research.factory import FactoryReport, ResearchFactory, ResearchFactoryConfig
 from stockbot.research.failures import mine_hard_negatives
 from stockbot.research.feature_ablation import FeatureAblationReport, FeatureAblationResult, evaluate_feature_group_ablation
@@ -39,6 +40,7 @@ __all__ = [
     "DriftReport",
     "EnsembleReport",
     "ExperimentRecord",
+    "FactorExposureReport",
     "FactoryReport",
     "FeatureAblationReport",
     "FeatureAblationResult",
@@ -69,6 +71,7 @@ __all__ = [
     "WindowRobustnessReport",
     "benjamini_hochberg",
     "build_horizon_ensemble",
+    "build_internal_factor_returns",
     "build_market_regime_series",
     "build_regime_router",
     "compact_deep_diagnostics",
@@ -77,6 +80,7 @@ __all__ = [
     "evaluate_block_bootstrap_uncertainty",
     "evaluate_capacity_curve",
     "evaluate_discoveries",
+    "evaluate_factor_exposure",
     "evaluate_feature_group_ablation",
     "evaluate_oos_stacking",
     "evaluate_paper_readiness",
