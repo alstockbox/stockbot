@@ -24,6 +24,25 @@ def test_cli_parser_accepts_required_market_download_arguments(tmp_path):
     assert args.train is True
 
 
+def test_cli_parser_accepts_research_factory_specialist_options(tmp_path):
+    parser = build_parser()
+    args = parser.parse_args([
+        "--provider", "yahoo-bootstrap",
+        "--symbols", "AAPL,MSFT,NVDA",
+        "--start", "2020-01-01",
+        "--end", "2025-12-31",
+        "--snapshot-root", str(tmp_path),
+        "--factory",
+        "--factory-regime-specialists",
+        "--factory-specialists-top-k", "3",
+        "--factory-run-dir", str(tmp_path / "runs"),
+    ])
+    assert args.factory is True
+    assert args.factory_regime_specialists is True
+    assert args.factory_specialists_top_k == 3
+    assert args.factory_run_dir == str(tmp_path / "runs")
+
+
 def test_resolve_provider_requires_tiingo_token(monkeypatch):
     monkeypatch.delenv("TIINGO_API_TOKEN", raising=False)
     with pytest.raises(ProviderError, match="TIINGO_API_TOKEN"):
