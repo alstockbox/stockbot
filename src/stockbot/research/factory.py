@@ -17,6 +17,7 @@ from stockbot.research.memory import JsonlExperimentMemory, experiment_id, make_
 from stockbot.research.multiple_testing import DiscoveryResult, evaluate_discoveries
 from stockbot.research.objective import ObjectiveWeights, risk_adjusted_objective
 from stockbot.research.population import ModelPopulationConfig, generate_model_population
+from stockbot.research.readiness import PaperReadinessReport, evaluate_paper_readiness
 from stockbot.research.regime_eval import RegimePerformanceReport, build_market_regime_series, evaluate_regime_performance
 from stockbot.research.stress import StressReport, evaluate_stress_suite
 from stockbot.research.training_pipeline import run_training_research
@@ -40,6 +41,7 @@ class ResearchFactoryConfig:
     min_regime_score: float = 0.20
     min_regime_coverage: float = 1.0 / 3.0
     reject_drifted_candidates: bool = True
+    require_paper_readiness: bool = True
     ensemble_temperature: float = 0.75
 
     def __post_init__(self) -> None:
@@ -83,6 +85,7 @@ class FactoryCandidate:
     discovery: DiscoveryResult | None
     drift_report: DriftReport | None
     holdout_report: HoldoutReport | None
+    paper_readiness: PaperReadinessReport | None
     gate: GateDecision
     result: ModelExperimentResult
 
@@ -108,8 +111,9 @@ class ResearchFactory:
     Hyperparameters are selected only on the research partition. Candidates are then
     filtered by transaction-cost-aware OOS performance, adversarial stress, market
     regime robustness, false-discovery control and recent-return drift before the
-    strongest models may touch the blind final holdout. Horizon winners are also
-    blended into a diversified research ensemble for meta-level evaluation.
+    strongest models may touch the blind final holdout. A final evidence-based paper
+    readiness gate decides whether a candidate is mature enough for extended shadow /
+    paper evaluation. Horizon winners are blended into a diversified meta-ensemble.
     """
 
     def __init__(
@@ -190,6 +194,7 @@ class ResearchFactory:
             discovery=None,
             drift_report=None,
             holdout_report=None,
+            paper_readiness=None,
             gate=gate,
             result=result,
         )
@@ -223,10 +228,14 @@ class ResearchFactory:
             for candidate in candidates
             if candidate.result.net_returns is not None and len(candidate.result.net_returns) > 0
         }
-        discoveries = evaluate_discoveries(
-            returns_by_id,
-            max_q_value=self.config.max_fdr_q_value,
-        ) if returns_by_id else {}
+        discoveries = (
+            evaluate_discoveries(
+                returns_by_id,
+                max_q_value=self.config.max_fdr_q_value,
+            )
+            if returns_by_id
+            else {}
+        )
 
         enriched: list[FactoryCandidate] = []
         for candidate in candidates:
@@ -315,6 +324,45 @@ class ResearchFactory:
         updated = [replacements.get(candidate.experiment_id, candidate) for candidate in candidates]
         return updated, len(selected)
 
+    def _apply_paper_readiness(self, candidates: list[FactoryCandidate]) -> list[FactoryCandidate]:
+        updated: list[FactoryCandidate] = []
+        for candidate in candidates:
+            regime_score = candidate.regime_report.score if candidate.regime_report is not None else 0.0
+            q_value = candidate.discovery.q_value if candidate.discovery is not None else None
+            drift_score = candidate.drift_report.score if candidate.drift_report is not None else 0.0
+            drift_degraded = candidate.drift_report.degraded if candidate.drift_report is not None else True
+            holdout_passed = candidate.holdout_report.passed if candidate.holdout_report is not None else False
+            holdout_score = candidate.holdout_report.score if candidate.holdout_report is not None else None
+            readiness = evaluate_paper_readiness(
+                oos_coverage=candidate.oos_coverage,
+                robustness=candidate.robustness,
+                stress_score=candidate.stress_score,
+                regime_score=regime_score,
+                discovery_q_value=q_value,
+                drift_score=drift_score,
+                drift_degraded=drift_degraded,
+                holdout_passed=holdout_passed,
+                holdout_score=holdout_score,
+                min_oos_coverage=self.config.gates.min_oos_coverage,
+                min_robustness=self.config.gates.min_robustness,
+                min_stress_score=self.config.gates.min_stress_score,
+                min_regime_score=self.config.min_regime_score,
+                max_discovery_q_value=self.config.max_fdr_q_value,
+            )
+            updated.append(replace(candidate, paper_readiness=readiness))
+        return updated
+
+    def _promotion_eligible(self, candidate: FactoryCandidate, *, holdout_required: bool) -> bool:
+        if not self._pre_holdout_eligible(candidate):
+            return False
+        if holdout_required:
+            if candidate.holdout_report is None or not candidate.holdout_report.passed:
+                return False
+        if self.config.require_paper_readiness:
+            if candidate.paper_readiness is None or not candidate.paper_readiness.ready:
+                return False
+        return True
+
     @staticmethod
     def _state_from_candidate(candidate: FactoryCandidate) -> ChampionState:
         holdout_score = (
@@ -389,16 +437,13 @@ class ResearchFactory:
                 holdout_start=holdout_start,
             )
 
-        if holdout_start is None:
-            promotion_pool = [candidate for candidate in candidates if self._pre_holdout_eligible(candidate)]
-        else:
-            promotion_pool = [
-                candidate
-                for candidate in candidates
-                if self._pre_holdout_eligible(candidate)
-                and candidate.holdout_report is not None
-                and candidate.holdout_report.passed
-            ]
+        candidates = self._apply_paper_readiness(candidates)
+        holdout_required = holdout_start is not None
+        promotion_pool = [
+            candidate
+            for candidate in candidates
+            if self._promotion_eligible(candidate, holdout_required=holdout_required)
+        ]
         promotion_pool.sort(key=lambda row: row.promotion_score, reverse=True)
 
         horizon_champions: dict[int, FactoryCandidate] = {}
