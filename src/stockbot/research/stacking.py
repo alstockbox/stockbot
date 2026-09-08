@@ -30,6 +30,26 @@ class StackingReport:
     turnover_series: pd.Series
 
 
+def _normalize_prediction_index(predictions: pd.Series) -> pd.Series:
+    series = pd.Series(predictions, dtype=float).copy()
+    if not isinstance(series.index, pd.MultiIndex) or series.index.nlevels != 2:
+        raise ValueError("stacking predictions require a two-level timestamp/symbol MultiIndex")
+    names = tuple(series.index.names)
+    if names == ("symbol", "timestamp"):
+        series = series.reorder_levels(["timestamp", "symbol"])
+    elif names != ("timestamp", "symbol"):
+        raise ValueError("stacking prediction index levels must be named timestamp and symbol")
+    timestamps = pd.to_datetime(series.index.get_level_values("timestamp"), utc=True)
+    symbols = series.index.get_level_values("symbol").astype(str)
+    series.index = pd.MultiIndex.from_arrays(
+        [timestamps, symbols],
+        names=["timestamp", "symbol"],
+    )
+    if series.index.has_duplicates:
+        raise ValueError("stacking prediction index contains duplicate timestamp/symbol rows")
+    return series.sort_index()
+
+
 def _candidate_prediction_frame(candidates: list[Any] | tuple[Any, ...], horizon: int) -> pd.DataFrame:
     selected = [candidate for candidate in candidates if int(candidate.horizon) == int(horizon)]
     if len(selected) < 2:
@@ -38,10 +58,14 @@ def _candidate_prediction_frame(candidates: list[Any] | tuple[Any, ...], horizon
     series = []
     for candidate in selected:
         predictions = getattr(candidate.result, "predictions", None)
-        if predictions is None or len(predictions.dropna()) == 0:
+        if predictions is None or len(pd.Series(predictions).dropna()) == 0:
             raise ValueError("all stacking members require retained OOS predictions")
-        series.append(pd.Series(predictions, dtype=float).rename(str(candidate.experiment_id)))
-    return pd.concat(series, axis=1, join="outer").sort_index()
+        normalized = _normalize_prediction_index(predictions)
+        series.append(normalized.rename(str(candidate.experiment_id)))
+    frame = pd.concat(series, axis=1, join="outer").sort_index()
+    if frame.notna().all(axis=1).sum() == 0:
+        raise ValueError("stacking members have no overlapping OOS prediction rows")
+    return frame
 
 
 def evaluate_oos_stacking(
@@ -72,6 +96,9 @@ def evaluate_oos_stacking(
     labels = make_panel_labels(panel, horizons=(horizon,))[f"fwd_return_{horizon}"]
     labels.name = f"fwd_return_{horizon}"
     prediction_frame = prediction_frame.reindex(panel.index)
+    overlapping = int(prediction_frame.notna().all(axis=1).sum())
+    if overlapping == 0:
+        raise ValueError("stacking predictions do not overlap the market panel index")
 
     n_dates = len(panel.index.get_level_values("timestamp").unique())
     train_periods = max(60, min(252, n_dates // 2))
@@ -103,6 +130,8 @@ def evaluate_oos_stacking(
 
     predicted = int(meta_predictions.notna().sum())
     eligible_count = int(eligible.sum())
+    if eligible_count > 0 and predicted == 0:
+        raise ValueError("stacking produced no meta-level OOS predictions")
     oos_coverage = predicted / eligible_count if eligible_count else 0.0
 
     metrics, robustness, net_returns, turnover = _evaluate_panel_predictions(
