@@ -85,6 +85,10 @@ def test_deep_diagnostics_never_pass_blind_holdout_rows_to_subresearch(monkeypat
     def fake_factor_exposure(*args, **kwargs):
         return SimpleNamespace(idiosyncratic_score=0.8)
 
+    def fake_neutralization(bars, *args, **kwargs):
+        _assert_research_only(bars)
+        return SimpleNamespace(neutralized_score=0.9)
+
     def fake_liquidity(bars, *args, **kwargs):
         _assert_research_only(bars)
         return SimpleNamespace(score=0.7)
@@ -111,13 +115,19 @@ def test_deep_diagnostics_never_pass_blind_holdout_rows_to_subresearch(monkeypat
     monkeypatch.setattr("stockbot.research.deep_diagnostics.evaluate_policy_arena", fake_policy)
     monkeypatch.setattr("stockbot.research.deep_diagnostics.evaluate_block_bootstrap_uncertainty", fake_bootstrap)
     monkeypatch.setattr("stockbot.research.deep_diagnostics.evaluate_factor_exposure", fake_factor_exposure)
+    monkeypatch.setattr("stockbot.research.deep_diagnostics.evaluate_sector_factor_neutralization", fake_neutralization)
     monkeypatch.setattr("stockbot.research.deep_diagnostics.simulate_liquidity_aware_execution", fake_liquidity)
     monkeypatch.setattr("stockbot.research.deep_diagnostics.evaluate_capacity_curve", fake_capacity)
     monkeypatch.setattr("stockbot.research.deep_diagnostics.evaluate_training_window_robustness", fake_windows)
     monkeypatch.setattr("stockbot.research.deep_diagnostics.evaluate_feature_group_ablation", fake_ablation)
 
     metadata = DatasetMetadata("deep-test", "synthetic", DataGrade.RESEARCH_GRADE)
-    diagnostics = run_deep_research_diagnostics(_bars(), metadata, _Report())
+    diagnostics = run_deep_research_diagnostics(
+        _bars(),
+        metadata,
+        _Report(),
+        point_in_time_universe=object(),
+    )
 
     assert diagnostics.candidate_count == 1
-    assert len(seen_max_dates) == 6
+    assert len(seen_max_dates) == 7
