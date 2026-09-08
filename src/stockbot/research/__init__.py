@@ -22,6 +22,7 @@ from stockbot.research.regime_eval import RegimePerformanceReport, build_market_
 from stockbot.research.regime_router import RegimeRouterReport, build_regime_router
 from stockbot.research.regime_specialists import RegimeSpecialistResult, run_regime_specialist, select_best_regime_specialists
 from stockbot.research.specialist_pipeline import RegimeSpecialistDiagnostics, run_regime_specialist_diagnostics, select_specialist_candidate_pairs
+from stockbot.research.stacking import StackingReport, evaluate_oos_stacking
 from stockbot.research.stress import StressReport, StressScenario, default_stress_suite, evaluate_stress_suite
 from stockbot.research.window_robustness import WindowResult, WindowRobustnessReport, evaluate_training_window_robustness
 
@@ -61,6 +62,7 @@ __all__ = [
     "ResearchGateCriteria",
     "ResearchJobManifest",
     "ResearchRunSummary",
+    "StackingReport",
     "StressReport",
     "StressScenario",
     "WindowResult",
@@ -76,6 +78,7 @@ __all__ = [
     "evaluate_capacity_curve",
     "evaluate_discoveries",
     "evaluate_feature_group_ablation",
+    "evaluate_oos_stacking",
     "evaluate_paper_readiness",
     "evaluate_policy_arena",
     "evaluate_regime_performance",
