@@ -31,8 +31,11 @@ class ResearchRunSummary:
     champion_experiment_id: str | None
     active_champion_experiment_id: str | None
     ensemble_score: float | None
+    specialist_router_score: float | None
+    specialist_scores: dict[str, float]
+    specialist_candidate_pairs_tested: int
     completed_at: str
-    schema_version: int = 1
+    schema_version: int = 2
 
 
 def make_job_manifest(
@@ -66,10 +69,23 @@ def make_job_manifest(
     )
 
 
-def make_run_summary(job_id: str, report: Any) -> ResearchRunSummary:
+def make_run_summary(
+    job_id: str,
+    report: Any,
+    specialist_diagnostics: Any | None = None,
+) -> ResearchRunSummary:
     champion = getattr(report, "champion_candidate", None)
     active = getattr(report, "active_champion", None)
     ensemble = getattr(report, "ensemble_report", None)
+
+    router = None
+    specialists: dict[str, Any] = {}
+    pairs_tested = 0
+    if specialist_diagnostics is not None:
+        router = getattr(specialist_diagnostics, "router_report", None)
+        specialists = dict(getattr(specialist_diagnostics, "specialists", {}) or {})
+        pairs_tested = int(getattr(specialist_diagnostics, "candidate_pairs_tested", 0))
+
     return ResearchRunSummary(
         job_id=str(job_id),
         experiments_run=int(report.experiments_run),
@@ -79,6 +95,9 @@ def make_run_summary(job_id: str, report: Any) -> ResearchRunSummary:
         champion_experiment_id=(None if champion is None else str(champion.experiment_id)),
         active_champion_experiment_id=(None if active is None else str(active.experiment_id)),
         ensemble_score=(None if ensemble is None else float(ensemble.score)),
+        specialist_router_score=(None if router is None else float(router.score)),
+        specialist_scores={key: float(value.score) for key, value in specialists.items()},
+        specialist_candidate_pairs_tested=pairs_tested,
         completed_at=datetime.now(timezone.utc).isoformat(),
     )
 
