@@ -1,6 +1,7 @@
 from stockbot.research.factory import FactoryReport, ResearchFactory, ResearchFactoryConfig
 from stockbot.research.failures import mine_hard_negatives
 from stockbot.research.gates import GateDecision, ResearchGateCriteria, evaluate_research_gate
+from stockbot.research.holdout import HoldoutConfig, HoldoutReport, evaluate_blind_holdout, split_research_holdout
 from stockbot.research.market_training import run_snapshot_factory, train_snapshot
 from stockbot.research.memory import ExperimentRecord, JsonlExperimentMemory
 from stockbot.research.objective import ObjectiveWeights, risk_adjusted_objective
@@ -11,6 +12,8 @@ __all__ = [
     "ExperimentRecord",
     "FactoryReport",
     "GateDecision",
+    "HoldoutConfig",
+    "HoldoutReport",
     "JsonlExperimentMemory",
     "ModelPopulationConfig",
     "ObjectiveWeights",
@@ -20,11 +23,13 @@ __all__ = [
     "StressReport",
     "StressScenario",
     "default_stress_suite",
+    "evaluate_blind_holdout",
     "evaluate_research_gate",
     "evaluate_stress_suite",
     "generate_model_population",
     "mine_hard_negatives",
     "risk_adjusted_objective",
     "run_snapshot_factory",
+    "split_research_holdout",
     "train_snapshot",
 ]
