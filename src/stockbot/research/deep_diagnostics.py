@@ -9,6 +9,10 @@ from stockbot.data.point_in_time_features import PointInTimeFeatureStore
 from stockbot.data.schemas import DatasetMetadata
 from stockbot.data.universe import PointInTimeUniverse
 from stockbot.ml.models import ModelConfig
+from stockbot.research.auxiliary_ablation import (
+    AuxiliaryAblationReport,
+    evaluate_auxiliary_feature_ablation,
+)
 from stockbot.research.bootstrap_uncertainty import BootstrapUncertaintyReport, evaluate_block_bootstrap_uncertainty
 from stockbot.research.capacity_curve import CapacityCurveReport, evaluate_capacity_curve
 from stockbot.research.factor_exposure import FactorExposureReport, build_internal_factor_returns, evaluate_factor_exposure
@@ -33,6 +37,7 @@ class CandidateDeepDiagnostics:
     window_robustness: WindowRobustnessReport
     feature_ablation: FeatureAblationReport
     neutralization: NeutralizationReport | None = None
+    auxiliary_ablation: AuxiliaryAblationReport | None = None
 
 
 @dataclass(frozen=True)
@@ -188,6 +193,7 @@ def run_deep_research_diagnostics(
                 top_fraction=best_policy.top_fraction,
                 weighting=best_policy.weighting,
             )
+
         liquidity = simulate_liquidity_aware_execution(
             research_bars,
             candidate.result.predictions,
@@ -231,6 +237,22 @@ def run_deep_research_diagnostics(
             auxiliary_max_age_days=auxiliary_max_age_days,
             auxiliary_min_coverage=auxiliary_min_coverage,
         )
+
+        auxiliary_ablation = None
+        if uses_auxiliary and replay_store is not None and replay_feature_names is not None:
+            auxiliary_ablation = evaluate_auxiliary_feature_ablation(
+                research_bars,
+                metadata,
+                model,
+                horizon=int(candidate.horizon),
+                feature_columns=replay_feature_names,
+                auxiliary_store=replay_store,
+                train_periods=(None if not windows.results else windows.results[0].train_periods),
+                test_periods=test_periods,
+                auxiliary_max_age_days=auxiliary_max_age_days,
+                auxiliary_min_coverage=auxiliary_min_coverage,
+            )
+
         diagnostics[candidate.experiment_id] = CandidateDeepDiagnostics(
             experiment_id=candidate.experiment_id,
             horizon=int(candidate.horizon),
@@ -243,6 +265,7 @@ def run_deep_research_diagnostics(
             window_robustness=windows,
             feature_ablation=ablation,
             neutralization=neutralization,
+            auxiliary_ablation=auxiliary_ablation,
         )
 
     stacking_reports: dict[int, StackingReport] = {}
@@ -303,6 +326,22 @@ def compact_deep_diagnostics(diagnostics: DeepResearchDiagnostics) -> dict[str, 
                 "neutralized_cagr": item.neutralization.neutralized_metrics.get("cagr", 0.0),
                 "neutralized_stress": item.neutralization.neutralized_stress.score,
             }
+
+        auxiliary_ablation = None
+        if item.auxiliary_ablation is not None:
+            auxiliary_ablation = {
+                "auxiliary_features": list(item.auxiliary_ablation.auxiliary_features),
+                "baseline_score": item.auxiliary_ablation.baseline_score,
+                "no_auxiliary_score": item.auxiliary_ablation.no_auxiliary_score,
+                "aggregate_score_impact": item.auxiliary_ablation.aggregate_score_impact,
+                "useful_features": list(item.auxiliary_ablation.useful_features),
+                "harmful_features": list(item.auxiliary_ablation.harmful_features),
+                "feature_impacts": {
+                    row.feature_name: row.score_impact
+                    for row in item.auxiliary_ablation.results
+                },
+            }
+
         rows[experiment_id] = {
             "horizon": item.horizon,
             "model_name": item.model_name,
@@ -347,6 +386,7 @@ def compact_deep_diagnostics(diagnostics: DeepResearchDiagnostics) -> dict[str, 
                 "observations": item.factor_exposure.observations,
             },
             "neutralization": neutralization,
+            "auxiliary_ablation": auxiliary_ablation,
             "liquidity_execution": {
                 "score": item.liquidity_execution.score,
                 "partial_fill_fraction": item.liquidity_execution.partial_fill_fraction,
