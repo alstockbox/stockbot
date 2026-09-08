@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+import re
 from urllib.parse import urlencode
 
 import pandas as pd
@@ -58,6 +59,8 @@ _AVAILABLE_KEYS = (
 )
 _VALUE_KEYS = ("value", "Value")
 _ROUND_KEYS = ("policy_round_name", "policyRoundName", "policy_round", "policyRound")
+_ROUND_LIST_KEYS = ("policy_rounds", "policyRounds", "data", "values", "results", "items")
+_ROUND_PATTERN = re.compile(r"^(?P<year>\d{4}):(?P<number>\d+)$")
 
 
 def _first(mapping: dict, keys: tuple[str, ...]):
@@ -106,6 +109,53 @@ def _rows_from_payload(payload) -> tuple[list[dict], dict]:
     return list(rows), metadata
 
 
+def policy_round_names(payload) -> tuple[str, ...]:
+    """Extract and chronologically sort historical policy-round identifiers."""
+
+    if isinstance(payload, list):
+        rows = payload
+    elif isinstance(payload, dict):
+        rows = None
+        for key in _ROUND_LIST_KEYS:
+            candidate = payload.get(key)
+            if isinstance(candidate, list):
+                rows = candidate
+                break
+        if rows is None:
+            raise ProviderError("Riksbank returned unsupported policy-round payload shape")
+    else:
+        raise ProviderError("Riksbank returned unsupported policy-round payload type")
+
+    names: set[str] = set()
+    for row in rows:
+        if isinstance(row, str):
+            name = row.strip()
+        elif isinstance(row, dict):
+            raw = _first(row, _ROUND_KEYS)
+            if raw is None:
+                raw = row.get("name")
+            name = str(raw or "").strip()
+        else:
+            raise ProviderError("Riksbank returned malformed policy-round row")
+        match = _ROUND_PATTERN.fullmatch(name)
+        if match is None:
+            raise ProviderError(f"Riksbank returned invalid policy-round identifier: {name!r}")
+        names.add(name)
+
+    if not names:
+        raise ProviderError("Riksbank returned no policy rounds")
+
+    return tuple(
+        sorted(
+            names,
+            key=lambda name: (
+                int(_ROUND_PATTERN.fullmatch(name).group("year")),
+                int(_ROUND_PATTERN.fullmatch(name).group("number")),
+            ),
+        )
+    )
+
+
 class RiksbankMonetaryPolicyProvider:
     """Point-in-time macro adapter for Sveriges Riksbank Monetary Policy Data API.
 
@@ -127,6 +177,30 @@ class RiksbankMonetaryPolicyProvider:
             {"Accept": "application/json", "User-Agent": "StockBot/2"},
         )
 
+    def policy_round_names(
+        self,
+        *,
+        start_year: int | None = None,
+        end_year: int | None = None,
+    ) -> tuple[str, ...]:
+        if start_year is not None and start_year < 2000:
+            raise ProviderError("Riksbank start_year is implausibly early")
+        if end_year is not None and end_year < 2000:
+            raise ProviderError("Riksbank end_year is implausibly early")
+        if start_year is not None and end_year is not None and start_year > end_year:
+            raise ProviderError("Riksbank start_year cannot exceed end_year")
+
+        names = policy_round_names(self.list_policy_rounds())
+        filtered = tuple(
+            name
+            for name in names
+            if (start_year is None or int(name[:4]) >= start_year)
+            and (end_year is None or int(name[:4]) <= end_year)
+        )
+        if not filtered:
+            raise ProviderError("no Riksbank policy rounds matched the requested year range")
+        return filtered
+
     def list_series(self):
         return self._transport.get_json(
             f"{BASE_URL}/series_ids",
@@ -140,8 +214,8 @@ class RiksbankMonetaryPolicyProvider:
         params = {"series": series}
         if policy_round is not None:
             round_name = str(policy_round).strip()
-            if not round_name:
-                raise ProviderError("Riksbank policy_round cannot be blank")
+            if _ROUND_PATTERN.fullmatch(round_name) is None and round_name != "latest":
+                raise ProviderError("Riksbank policy_round must be YYYY:N or 'latest'")
             params["policy_round_name"] = round_name
         url = f"{BASE_URL}?{urlencode(params)}"
         return self._transport.get_json(
@@ -232,6 +306,18 @@ class RiksbankMonetaryPolicyProvider:
             kind=series.kind,
         )
 
+    @staticmethod
+    def _store(observations: list[PointInTimeFeatureObservation]) -> PointInTimeFeatureStore:
+        return PointInTimeFeatureStore(
+            observations,
+            PointInTimeFeatureManifest(
+                source=RiksbankMonetaryPolicyProvider.name,
+                point_in_time=True,
+                revision_aware=True,
+                available_time_semantics="riksbank_cutoff_or_publication_time",
+            ),
+        )
+
     def build_store(
         self,
         series: tuple[RiksbankSeries, ...] | list[RiksbankSeries] = DEFAULT_SERIES,
@@ -244,15 +330,26 @@ class RiksbankMonetaryPolicyProvider:
         observations: list[PointInTimeFeatureObservation] = []
         for item in requested:
             observations.extend(self.fetch_feature(item, policy_round=policy_round))
-        return PointInTimeFeatureStore(
-            observations,
-            PointInTimeFeatureManifest(
-                source=self.name,
-                point_in_time=True,
-                revision_aware=True,
-                available_time_semantics="riksbank_cutoff_or_publication_time",
-            ),
-        )
+        return self._store(observations)
+
+    def build_vintage_store(
+        self,
+        series: tuple[RiksbankSeries, ...] | list[RiksbankSeries] = DEFAULT_SERIES,
+        *,
+        start_year: int | None = 2020,
+        end_year: int | None = None,
+    ) -> PointInTimeFeatureStore:
+        """Collect every requested series for each historical policy-round vintage."""
+
+        requested = tuple(series)
+        if not requested:
+            raise ProviderError("at least one Riksbank series is required")
+        rounds = self.policy_round_names(start_year=start_year, end_year=end_year)
+        observations: list[PointInTimeFeatureObservation] = []
+        for round_name in rounds:
+            for item in requested:
+                observations.extend(self.fetch_feature(item, policy_round=round_name))
+        return self._store(observations)
 
 
 __all__ = [
@@ -260,4 +357,5 @@ __all__ = [
     "DEFAULT_SERIES",
     "RiksbankMonetaryPolicyProvider",
     "RiksbankSeries",
+    "policy_round_names",
 ]
