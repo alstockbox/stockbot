@@ -117,6 +117,17 @@ def split_sealed_quarantine(
     )
 
 
+def load_quarantine_manifest(path: str | Path) -> QuarantineManifest | None:
+    target = Path(path)
+    if not target.exists():
+        return None
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    manifest = QuarantineManifest(**payload)
+    if manifest.state != "sealed":
+        raise ValueError("quarantine manifest is not in sealed state")
+    return manifest
+
+
 def write_quarantine_manifest(path: str | Path, manifest: QuarantineManifest) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -140,3 +151,34 @@ def assert_same_quarantine_boundary(
         raise ValueError(
             "quarantine boundary is sealed; rotating it requires an explicit new research cycle"
         )
+
+
+def persist_sealed_quarantine(
+    path: str | Path,
+    split: QuarantineSplit,
+    config: QuarantineConfig,
+) -> QuarantineManifest:
+    """Persist a quarantine manifest while refusing silent boundary rotation.
+
+    Counts and the content-derived quarantine id may evolve as new future observations
+    arrive, but the start boundary cannot move. This lets a quarantine grow without
+    allowing previous audit observations back into routine research.
+    """
+
+    existing = load_quarantine_manifest(path)
+    if existing is not None:
+        assert_same_quarantine_boundary(existing, config)
+        created_at = existing.created_at
+        manifest = QuarantineManifest(
+            quarantine_id=split.manifest.quarantine_id,
+            start=existing.start,
+            development_periods=split.manifest.development_periods,
+            quarantine_periods=split.manifest.quarantine_periods,
+            development_rows=split.manifest.development_rows,
+            quarantine_rows=split.manifest.quarantine_rows,
+            created_at=created_at,
+        )
+    else:
+        manifest = split.manifest
+    write_quarantine_manifest(path, manifest)
+    return manifest
