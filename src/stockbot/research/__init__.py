@@ -27,6 +27,13 @@ from stockbot.research.quarantine import (
     persist_sealed_quarantine,
     split_sealed_quarantine,
 )
+from stockbot.research.quarantine_audit import (
+    FrozenStrategySpec,
+    QuarantineAuditRecord,
+    QuarantineAuditResult,
+    freeze_strategy_spec,
+    run_single_quarantine_audit,
+)
 from stockbot.research.readiness import PaperReadinessReport, evaluate_paper_readiness
 from stockbot.research.regime_eval import RegimePerformanceReport, build_market_regime_series, evaluate_regime_performance
 from stockbot.research.regime_router import RegimeRouterReport, build_regime_router
@@ -53,6 +60,7 @@ __all__ = [
     "FactoryReport",
     "FeatureAblationReport",
     "FeatureAblationResult",
+    "FrozenStrategySpec",
     "GateDecision",
     "HoldoutConfig",
     "HoldoutReport",
@@ -64,6 +72,8 @@ __all__ = [
     "PolicyArenaReport",
     "PolicyResult",
     "PortfolioPolicy",
+    "QuarantineAuditRecord",
+    "QuarantineAuditResult",
     "QuarantineConfig",
     "QuarantineManifest",
     "QuarantineSplit",
@@ -103,6 +113,7 @@ __all__ = [
     "evaluate_return_drift",
     "evaluate_stress_suite",
     "evaluate_training_window_robustness",
+    "freeze_strategy_spec",
     "generate_adaptive_population",
     "generate_model_population",
     "load_quarantine_manifest",
@@ -114,6 +125,7 @@ __all__ = [
     "run_deep_research_diagnostics",
     "run_regime_specialist",
     "run_regime_specialist_diagnostics",
+    "run_single_quarantine_audit",
     "run_snapshot_deep_diagnostics",
     "run_snapshot_factory",
     "run_snapshot_regime_specialists",
