@@ -18,6 +18,15 @@ from stockbot.research.multiple_testing import DiscoveryResult, benjamini_hochbe
 from stockbot.research.objective import ObjectiveWeights, risk_adjusted_objective
 from stockbot.research.policy_search import PolicyArenaReport, PolicyResult, PortfolioPolicy, evaluate_policy_arena
 from stockbot.research.population import ModelPopulationConfig, generate_model_population
+from stockbot.research.quarantine import (
+    QuarantineConfig,
+    QuarantineManifest,
+    QuarantineSplit,
+    assert_same_quarantine_boundary,
+    load_quarantine_manifest,
+    persist_sealed_quarantine,
+    split_sealed_quarantine,
+)
 from stockbot.research.readiness import PaperReadinessReport, evaluate_paper_readiness
 from stockbot.research.regime_eval import RegimePerformanceReport, build_market_regime_series, evaluate_regime_performance
 from stockbot.research.regime_router import RegimeRouterReport, build_regime_router
@@ -55,6 +64,9 @@ __all__ = [
     "PolicyArenaReport",
     "PolicyResult",
     "PortfolioPolicy",
+    "QuarantineConfig",
+    "QuarantineManifest",
+    "QuarantineSplit",
     "RegimePerformanceReport",
     "RegimeRouterReport",
     "RegimeSpecialistDiagnostics",
@@ -69,6 +81,7 @@ __all__ = [
     "StressScenario",
     "WindowResult",
     "WindowRobustnessReport",
+    "assert_same_quarantine_boundary",
     "benjamini_hochberg",
     "build_horizon_ensemble",
     "build_internal_factor_returns",
@@ -92,9 +105,11 @@ __all__ = [
     "evaluate_training_window_robustness",
     "generate_adaptive_population",
     "generate_model_population",
+    "load_quarantine_manifest",
     "make_job_manifest",
     "make_run_summary",
     "mine_hard_negatives",
+    "persist_sealed_quarantine",
     "risk_adjusted_objective",
     "run_deep_research_diagnostics",
     "run_regime_specialist",
@@ -105,6 +120,7 @@ __all__ = [
     "select_best_regime_specialists",
     "select_specialist_candidate_pairs",
     "split_research_holdout",
+    "split_sealed_quarantine",
     "train_snapshot",
     "write_json_payload",
     "write_json_record",
