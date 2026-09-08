@@ -83,6 +83,8 @@ def evaluate_blind_holdout(
     holdout_start: pd.Timestamp,
     config: HoldoutConfig | None = None,
     objective: ObjectiveWeights | None = None,
+    top_fraction: float = 0.30,
+    weighting: str = "equal",
 ) -> HoldoutReport:
     """Fit only on pre-holdout observations and score only the untouched final block."""
 
@@ -138,7 +140,11 @@ def evaluate_blind_holdout(
     metrics, robustness, net_returns, turnover = _evaluate_panel_predictions(
         panel,
         predictions,
-        ExperimentConfig(model_config),
+        ExperimentConfig(
+            model_config,
+            top_fraction=top_fraction,
+            weighting=weighting,
+        ),
     )
     coverage = float(predictions.loc[holdout_mask].notna().mean())
     stress = evaluate_stress_suite(net_returns, turnover=turnover)
