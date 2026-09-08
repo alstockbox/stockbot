@@ -7,6 +7,7 @@ import pandas as pd
 
 from stockbot.data.schemas import DatasetMetadata
 from stockbot.ml.models import ModelConfig
+from stockbot.research.capacity_curve import CapacityCurveReport, evaluate_capacity_curve
 from stockbot.research.feature_ablation import FeatureAblationReport, evaluate_feature_group_ablation
 from stockbot.research.liquidity_execution import LiquidityExecutionConfig, LiquidityExecutionReport, simulate_liquidity_aware_execution
 from stockbot.research.policy_search import PolicyArenaReport, evaluate_policy_arena
@@ -20,6 +21,7 @@ class CandidateDeepDiagnostics:
     model_name: str
     policy_arena: PolicyArenaReport
     liquidity_execution: LiquidityExecutionReport
+    capacity_curve: CapacityCurveReport
     window_robustness: WindowRobustnessReport
     feature_ablation: FeatureAblationReport
 
@@ -75,6 +77,17 @@ def run_deep_research_diagnostics(
     train_windows: tuple[int, ...] = (126, 252, 504),
     test_periods: int = 21,
     liquidity_config: LiquidityExecutionConfig | None = None,
+    capacity_levels: tuple[float, ...] = (
+        10_000.0,
+        25_000.0,
+        50_000.0,
+        100_000.0,
+        250_000.0,
+        500_000.0,
+        1_000_000.0,
+        2_500_000.0,
+        5_000_000.0,
+    ),
 ) -> DeepResearchDiagnostics:
     """Run expensive diagnostics only on top generalists and only before blind holdout."""
 
@@ -106,6 +119,15 @@ def run_deep_research_diagnostics(
             config=liquidity_config,
             oos_coverage=candidate.oos_coverage,
         )
+        capacity_curve = evaluate_capacity_curve(
+            research_bars,
+            candidate.result.predictions,
+            capital_levels=capacity_levels,
+            top_fraction=best_policy.top_fraction,
+            weighting=best_policy.weighting,
+            base_config=liquidity_config,
+            oos_coverage=candidate.oos_coverage,
+        )
         windows = evaluate_training_window_robustness(
             research_bars,
             metadata,
@@ -128,6 +150,7 @@ def run_deep_research_diagnostics(
             model_name=candidate.model_name,
             policy_arena=policy,
             liquidity_execution=liquidity,
+            capacity_curve=capacity_curve,
             window_robustness=windows,
             feature_ablation=ablation,
         )
@@ -162,6 +185,30 @@ def compact_deep_diagnostics(diagnostics: DeepResearchDiagnostics) -> dict[str, 
                 "average_tracking_error": item.liquidity_execution.average_tracking_error,
                 "capacity_utilization": item.liquidity_execution.capacity_utilization,
                 "cost_ratio": item.liquidity_execution.metrics.get("cost_ratio", 0.0),
+            },
+            "capacity_curve": {
+                "capacity_score": item.capacity_curve.capacity_score,
+                "max_effective_capital": item.capacity_curve.max_effective_capital,
+                "first_break_capital": item.capacity_curve.first_break_capital,
+                "baseline_capital": item.capacity_curve.baseline_capital,
+                "baseline_score": item.capacity_curve.baseline_score,
+                "score_retention_at_max": item.capacity_curve.score_retention_at_max,
+                "points": [
+                    {
+                        "capital": point.capital,
+                        "score": point.score,
+                        "cagr": point.cagr,
+                        "sharpe": point.sharpe,
+                        "max_drawdown": point.max_drawdown,
+                        "partial_fill_fraction": point.partial_fill_fraction,
+                        "average_tracking_error": point.average_tracking_error,
+                        "average_participation": point.average_participation,
+                        "cost_ratio": point.cost_ratio,
+                        "score_retention": point.score_retention,
+                        "usable": point.usable,
+                    }
+                    for point in item.capacity_curve.points
+                ],
             },
             "window_robustness": {
                 "score": item.window_robustness.score,
