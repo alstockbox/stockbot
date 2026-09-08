@@ -12,6 +12,7 @@ from stockbot.research.capacity_curve import CapacityCurveReport, evaluate_capac
 from stockbot.research.feature_ablation import FeatureAblationReport, evaluate_feature_group_ablation
 from stockbot.research.liquidity_execution import LiquidityExecutionConfig, LiquidityExecutionReport, simulate_liquidity_aware_execution
 from stockbot.research.policy_search import PolicyArenaReport, evaluate_policy_arena
+from stockbot.research.stacking import StackingReport, evaluate_oos_stacking
 from stockbot.research.window_robustness import WindowRobustnessReport, evaluate_training_window_robustness
 
 
@@ -31,6 +32,7 @@ class CandidateDeepDiagnostics:
 @dataclass(frozen=True)
 class DeepResearchDiagnostics:
     candidates: dict[str, CandidateDeepDiagnostics]
+    stacking_reports: dict[int, StackingReport]
     candidate_count: int
 
 
@@ -58,6 +60,34 @@ def select_deep_diagnostic_candidates(
     return selected
 
 
+def _stacking_groups(
+    candidates: list[Any] | tuple[Any, ...],
+    *,
+    top_k_per_horizon: int,
+) -> dict[int, list[Any]]:
+    if top_k_per_horizon < 2:
+        raise ValueError("stacking top-k must be at least 2")
+    grouped: dict[int, list[Any]] = {}
+    for candidate in candidates:
+        if not getattr(candidate, "gate", None) or not candidate.gate.passed:
+            continue
+        predictions = getattr(candidate.result, "predictions", None)
+        if predictions is None or len(predictions.dropna()) == 0:
+            continue
+        grouped.setdefault(int(candidate.horizon), []).append(candidate)
+
+    output: dict[int, list[Any]] = {}
+    for horizon, rows in grouped.items():
+        ranked = sorted(
+            rows,
+            key=lambda item: float(getattr(item, "selection_score", item.factory_score)),
+            reverse=True,
+        )
+        if len(ranked) >= 2:
+            output[horizon] = ranked[:top_k_per_horizon]
+    return output
+
+
 def _research_partition(bars: pd.DataFrame, holdout_start: pd.Timestamp | None) -> pd.DataFrame:
     if holdout_start is None:
         return bars.copy()
@@ -76,6 +106,7 @@ def run_deep_research_diagnostics(
     factory_report: Any,
     *,
     top_k_per_horizon: int = 1,
+    stacking_top_k_per_horizon: int = 3,
     train_windows: tuple[int, ...] = (126, 252, 504),
     test_periods: int = 21,
     liquidity_config: LiquidityExecutionConfig | None = None,
@@ -167,8 +198,20 @@ def run_deep_research_diagnostics(
             feature_ablation=ablation,
         )
 
+    stacking_reports: dict[int, StackingReport] = {}
+    for horizon, members in _stacking_groups(
+        factory_report.candidates,
+        top_k_per_horizon=stacking_top_k_per_horizon,
+    ).items():
+        stacking_reports[horizon] = evaluate_oos_stacking(
+            research_bars,
+            members,
+            horizon=horizon,
+        )
+
     return DeepResearchDiagnostics(
         candidates=diagnostics,
+        stacking_reports=stacking_reports,
         candidate_count=len(diagnostics),
     )
 
@@ -176,7 +219,24 @@ def run_deep_research_diagnostics(
 def compact_deep_diagnostics(diagnostics: DeepResearchDiagnostics) -> dict[str, object]:
     """Produce a JSON-friendly summary without serializing prediction/return series."""
 
-    output: dict[str, object] = {"candidate_count": diagnostics.candidate_count, "candidates": {}}
+    output: dict[str, object] = {
+        "candidate_count": diagnostics.candidate_count,
+        "candidates": {},
+        "stacking": {
+            str(horizon): {
+                "member_ids": list(report.member_ids),
+                "meta_model": report.meta_model.name,
+                "score": report.score,
+                "oos_coverage": report.oos_coverage,
+                "robustness": report.robustness,
+                "sharpe": report.metrics.get("sharpe", 0.0),
+                "cagr": report.metrics.get("cagr", 0.0),
+                "max_drawdown": report.metrics.get("max_drawdown", 0.0),
+                "stress_score": report.stress_report.score,
+            }
+            for horizon, report in diagnostics.stacking_reports.items()
+        },
+    }
     rows: dict[str, object] = {}
     for experiment_id, item in diagnostics.candidates.items():
         baseline_score = None if item.policy_arena.baseline is None else item.policy_arena.baseline.score
