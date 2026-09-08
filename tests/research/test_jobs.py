@@ -25,6 +25,21 @@ class _Report:
     ensemble_report = _Ensemble()
 
 
+class _Specialist:
+    def __init__(self, score: float):
+        self.score = score
+
+
+class _Router:
+    score = 0.66
+
+
+class _Diagnostics:
+    specialists = {"bull_trend": _Specialist(1.2), "neutral_chop": _Specialist(0.9)}
+    router_report = _Router()
+    candidate_pairs_tested = 4
+
+
 def test_job_manifest_is_deterministic_for_same_research_inputs():
     kwargs = dict(
         snapshot_id="snapshot-a",
@@ -49,7 +64,7 @@ def test_run_summary_and_atomic_json_writer(tmp_path):
         max_workers=2,
         memory_path=None,
     )
-    summary = make_run_summary(manifest.job_id, _Report())
+    summary = make_run_summary(manifest.job_id, _Report(), _Diagnostics())
     target = tmp_path / "summary.json"
     write_json_record(target, summary)
     payload = json.loads(target.read_text(encoding="utf-8"))
@@ -57,3 +72,7 @@ def test_run_summary_and_atomic_json_writer(tmp_path):
     assert payload["experiments_run"] == 120
     assert payload["ensemble_score"] == 0.72
     assert payload["champion_experiment_id"] == "candidate-1"
+    assert payload["specialist_router_score"] == 0.66
+    assert payload["specialist_scores"]["bull_trend"] == 1.2
+    assert payload["specialist_candidate_pairs_tested"] == 4
+    assert payload["schema_version"] == 2
