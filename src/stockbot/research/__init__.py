@@ -1,3 +1,4 @@
+from stockbot.research.champion import ChampionState, JsonChampionStore
 from stockbot.research.factory import FactoryReport, ResearchFactory, ResearchFactoryConfig
 from stockbot.research.failures import mine_hard_negatives
 from stockbot.research.gates import GateDecision, ResearchGateCriteria, evaluate_research_gate
@@ -9,11 +10,13 @@ from stockbot.research.population import ModelPopulationConfig, generate_model_p
 from stockbot.research.stress import StressReport, StressScenario, default_stress_suite, evaluate_stress_suite
 
 __all__ = [
+    "ChampionState",
     "ExperimentRecord",
     "FactoryReport",
     "GateDecision",
     "HoldoutConfig",
     "HoldoutReport",
+    "JsonChampionStore",
     "JsonlExperimentMemory",
     "ModelPopulationConfig",
     "ObjectiveWeights",
