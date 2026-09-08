@@ -381,3 +381,90 @@ def build_feature_store_from_xbrl(
             available_time_semantics="bolagsverket_registration_time",
         ),
     )
+
+
+def xbrl_content_from_document_zip(
+    content: bytes,
+    *,
+    max_members: int = 64,
+    max_uncompressed_bytes: int = 50_000_000,
+    max_document_bytes: int = 20_000_000,
+) -> bytes:
+    """Extract one XBRL/iXBRL candidate from a bounded in-memory ZIP archive."""
+
+    import io
+    import zipfile
+
+    if max_members <= 0 or max_uncompressed_bytes <= 0 or max_document_bytes <= 0:
+        raise ValueError("Bolagsverket ZIP safety limits must be positive")
+    raw = bytes(content)
+    if not raw:
+        raise ProviderError("Bolagsverket document ZIP is empty")
+
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(raw), mode="r")
+    except (zipfile.BadZipFile, OSError) as exc:
+        raise ProviderError("Bolagsverket document is not a valid zip archive") from exc
+
+    with archive:
+        members = archive.infolist()
+        if len(members) > max_members:
+            raise ProviderError("Bolagsverket document ZIP contains too many members")
+        if any(info.flag_bits & 0x1 for info in members):
+            raise ProviderError("encrypted Bolagsverket ZIP members are not supported")
+
+        total_size = sum(int(info.file_size) for info in members if not info.is_dir())
+        if total_size > max_uncompressed_bytes:
+            raise ProviderError("Bolagsverket document ZIP exceeds uncompressed size limit")
+
+        allowed_suffixes = (".xhtml", ".html", ".xbrl", ".xml")
+        candidates = [
+            info
+            for info in members
+            if not info.is_dir() and info.filename.casefold().endswith(allowed_suffixes)
+        ]
+        if not candidates:
+            raise ProviderError("Bolagsverket document ZIP contains no XBRL candidate")
+        if len(candidates) > 1:
+            raise ProviderError("Bolagsverket document ZIP contains multiple XBRL candidates")
+
+        candidate = candidates[0]
+        if int(candidate.file_size) > max_document_bytes:
+            raise ProviderError("Bolagsverket XBRL document exceeds size limit")
+        try:
+            extracted = archive.read(candidate)
+        except (RuntimeError, OSError, zipfile.BadZipFile) as exc:
+            raise ProviderError("Bolagsverket XBRL ZIP member could not be read") from exc
+        if len(extracted) > max_document_bytes:
+            raise ProviderError("Bolagsverket XBRL document exceeds size limit")
+        if not extracted:
+            raise ProviderError("Bolagsverket XBRL ZIP member is empty")
+        return extracted
+
+
+def build_feature_store_from_document_zip(
+    content: bytes,
+    *,
+    document: BolagsverketDocument,
+    symbol: str,
+    fact_specs: tuple[BolagsverketFactSpec, ...] | list[BolagsverketFactSpec] = DEFAULT_FACT_SPECS,
+    max_members: int = 64,
+    max_uncompressed_bytes: int = 50_000_000,
+    max_document_bytes: int = 20_000_000,
+) -> PointInTimeFeatureStore:
+    """Build a point-in-time fundamental store directly from Bolagsverket ZIP bytes."""
+
+    if "zip" not in document.file_format.casefold():
+        raise ProviderError("Bolagsverket document metadata does not describe a ZIP file")
+    xbrl = xbrl_content_from_document_zip(
+        content,
+        max_members=max_members,
+        max_uncompressed_bytes=max_uncompressed_bytes,
+        max_document_bytes=max_document_bytes,
+    )
+    return build_feature_store_from_xbrl(
+        xbrl,
+        document=document,
+        symbol=symbol,
+        fact_specs=fact_specs,
+    )
