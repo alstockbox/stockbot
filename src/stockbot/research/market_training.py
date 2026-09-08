@@ -6,6 +6,8 @@ import pandas as pd
 from stockbot.data.market_schema import validate_canonical_bars
 from stockbot.data.schemas import DatasetMetadata
 from stockbot.data.snapshots import MarketSnapshot
+from stockbot.research.factory import FactoryReport, ResearchFactory, ResearchFactoryConfig
+from stockbot.research.memory import JsonlExperimentMemory
 from stockbot.research.training_pipeline import TrainingRun, run_training_research
 
 
@@ -36,21 +38,40 @@ def prepare_training_bars(canonical_bars: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
-def train_snapshot(
-    snapshot: MarketSnapshot,
-    model_configs=None,
-    horizon: int = 5,
-) -> TrainingRun:
-    metadata = DatasetMetadata(
+def _snapshot_metadata(snapshot: MarketSnapshot) -> DatasetMetadata:
+    return DatasetMetadata(
         name=snapshot.snapshot_id,
         source=snapshot.manifest.provider,
         grade=snapshot.manifest.grade,
         version=snapshot.manifest.schema_version,
         created_at=snapshot.manifest.created_at,
     )
+
+
+def train_snapshot(
+    snapshot: MarketSnapshot,
+    model_configs=None,
+    horizon: int = 5,
+) -> TrainingRun:
     return run_training_research(
         prepare_training_bars(snapshot.bars),
-        metadata,
+        _snapshot_metadata(snapshot),
         model_configs=model_configs,
         horizon=horizon,
+    )
+
+
+def run_snapshot_factory(
+    snapshot: MarketSnapshot,
+    *,
+    config: ResearchFactoryConfig | None = None,
+    memory_path: str | None = None,
+) -> FactoryReport:
+    """Run the V2 multi-horizon research factory on an immutable market snapshot."""
+
+    memory = JsonlExperimentMemory(memory_path) if memory_path else None
+    factory = ResearchFactory(config, memory=memory)
+    return factory.run(
+        prepare_training_bars(snapshot.bars),
+        _snapshot_metadata(snapshot),
     )
