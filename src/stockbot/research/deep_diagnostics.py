@@ -7,6 +7,7 @@ import pandas as pd
 
 from stockbot.data.schemas import DatasetMetadata
 from stockbot.ml.models import ModelConfig
+from stockbot.research.bootstrap_uncertainty import BootstrapUncertaintyReport, evaluate_block_bootstrap_uncertainty
 from stockbot.research.capacity_curve import CapacityCurveReport, evaluate_capacity_curve
 from stockbot.research.feature_ablation import FeatureAblationReport, evaluate_feature_group_ablation
 from stockbot.research.liquidity_execution import LiquidityExecutionConfig, LiquidityExecutionReport, simulate_liquidity_aware_execution
@@ -20,6 +21,7 @@ class CandidateDeepDiagnostics:
     horizon: int
     model_name: str
     policy_arena: PolicyArenaReport
+    bootstrap_uncertainty: BootstrapUncertaintyReport
     liquidity_execution: LiquidityExecutionReport
     capacity_curve: CapacityCurveReport
     window_robustness: WindowRobustnessReport
@@ -88,6 +90,9 @@ def run_deep_research_diagnostics(
         2_500_000.0,
         5_000_000.0,
     ),
+    bootstrap_block_size: int = 21,
+    bootstrap_samples: int = 500,
+    bootstrap_confidence_level: float = 0.90,
 ) -> DeepResearchDiagnostics:
     """Run expensive diagnostics only on top generalists and only before blind holdout."""
 
@@ -109,6 +114,12 @@ def run_deep_research_diagnostics(
             candidate.result,
         )
         best_policy = policy.best.policy
+        bootstrap = evaluate_block_bootstrap_uncertainty(
+            policy.best.net_returns,
+            block_size=min(bootstrap_block_size, len(policy.best.net_returns)),
+            samples=bootstrap_samples,
+            confidence_level=bootstrap_confidence_level,
+        )
         if candidate.result.predictions is None:
             raise ValueError("deep diagnostics require retained OOS predictions")
         liquidity = simulate_liquidity_aware_execution(
@@ -149,6 +160,7 @@ def run_deep_research_diagnostics(
             horizon=int(candidate.horizon),
             model_name=candidate.model_name,
             policy_arena=policy,
+            bootstrap_uncertainty=bootstrap,
             liquidity_execution=liquidity,
             capacity_curve=capacity_curve,
             window_robustness=windows,
@@ -176,6 +188,29 @@ def compact_deep_diagnostics(diagnostics: DeepResearchDiagnostics) -> dict[str, 
                 "weighting": item.policy_arena.best.policy.weighting,
                 "score": item.policy_arena.best.score,
                 "baseline_score": baseline_score,
+            },
+            "bootstrap_uncertainty": {
+                "confidence_score": item.bootstrap_uncertainty.confidence_score,
+                "probability_positive_cagr": item.bootstrap_uncertainty.probability_positive_cagr,
+                "probability_positive_sharpe": item.bootstrap_uncertainty.probability_positive_sharpe,
+                "samples": item.bootstrap_uncertainty.samples,
+                "block_size": item.bootstrap_uncertainty.block_size,
+                "confidence_level": item.bootstrap_uncertainty.confidence_level,
+                "cagr": {
+                    "lower": item.bootstrap_uncertainty.cagr.lower,
+                    "median": item.bootstrap_uncertainty.cagr.median,
+                    "upper": item.bootstrap_uncertainty.cagr.upper,
+                },
+                "sharpe": {
+                    "lower": item.bootstrap_uncertainty.sharpe.lower,
+                    "median": item.bootstrap_uncertainty.sharpe.median,
+                    "upper": item.bootstrap_uncertainty.sharpe.upper,
+                },
+                "max_drawdown": {
+                    "lower": item.bootstrap_uncertainty.max_drawdown.lower,
+                    "median": item.bootstrap_uncertainty.max_drawdown.median,
+                    "upper": item.bootstrap_uncertainty.max_drawdown.upper,
+                },
             },
             "liquidity_execution": {
                 "score": item.liquidity_execution.score,
