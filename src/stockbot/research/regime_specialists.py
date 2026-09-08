@@ -1,22 +1,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Sequence
 
 import numpy as np
 import pandas as pd
 
 from stockbot.arena.experiments import ExperimentConfig, _evaluate_panel_predictions
 from stockbot.data.panel import build_panel
+from stockbot.data.point_in_time_features import PointInTimeFeatureStore
 from stockbot.data.schemas import DatasetMetadata
 from stockbot.domain.models import MarketRegime
-from stockbot.features.cross_sectional import add_cross_sectional_features
+from stockbot.features.research_matrix import build_research_feature_matrix
 from stockbot.ml.labels import make_panel_labels
 from stockbot.ml.models import ModelConfig, build_model
 from stockbot.ml.purged_cv import PurgedWalkForwardSplitter
 from stockbot.research.objective import risk_adjusted_objective
 from stockbot.research.regime_eval import build_market_regime_series
 from stockbot.research.stress import StressReport, evaluate_stress_suite
-from stockbot.research.training_pipeline import FEATURE_COLUMNS
 
 
 @dataclass(frozen=True)
@@ -40,20 +41,27 @@ def run_regime_specialist(
     *,
     regime: MarketRegime,
     horizon: int,
+    feature_columns: tuple[str, ...] | list[str] | None = None,
+    auxiliary_store: PointInTimeFeatureStore | None = None,
+    auxiliary_feature_names: tuple[str, ...] | list[str] | None = None,
+    auxiliary_max_age_days: int | None = None,
+    auxiliary_min_coverage: float = 0.80,
 ) -> RegimeSpecialistResult:
-    """Train and evaluate a model only on observations belonging to one market regime.
-
-    The specialist uses the same causal features and purged walk-forward structure as
-    the general research pipeline. Training rows and OOS prediction rows are both
-    restricted to the target regime, so each specialist is judged only where it is
-    intended to be active.
-    """
+    """Train and evaluate a model only on observations belonging to one market regime."""
 
     if horizon <= 0:
         raise ValueError("horizon must be positive")
 
     panel = build_panel(bars)
-    features = add_cross_sectional_features(panel).loc[:, FEATURE_COLUMNS]
+    matrix = build_research_feature_matrix(
+        panel,
+        feature_columns=feature_columns,
+        auxiliary_store=auxiliary_store,
+        auxiliary_feature_names=auxiliary_feature_names,
+        auxiliary_max_age_days=auxiliary_max_age_days,
+        auxiliary_min_coverage=auxiliary_min_coverage,
+    )
+    features = matrix.frame
     labels = make_panel_labels(panel, horizons=(horizon,))[f"fwd_return_{horizon}"]
     labels.name = f"fwd_return_{horizon}"
 
@@ -126,22 +134,56 @@ def run_regime_specialist(
     )
 
 
+def _unpack_candidate_spec(
+    candidate: Sequence[object],
+) -> tuple[int, ModelConfig, tuple[str, ...] | None]:
+    if len(candidate) == 2:
+        horizon, model_config = candidate
+        feature_columns = None
+    elif len(candidate) == 3:
+        horizon, model_config, feature_columns = candidate
+    else:
+        raise ValueError("specialist candidate spec must contain horizon/model[/features]")
+    if not isinstance(model_config, ModelConfig):
+        raise ValueError("specialist candidate spec requires ModelConfig")
+    normalized_features = None if feature_columns is None else tuple(str(value) for value in feature_columns)
+    return int(horizon), model_config, normalized_features
+
+
 def select_best_regime_specialists(
     bars: pd.DataFrame,
     metadata: DatasetMetadata,
-    candidates: list[tuple[int, ModelConfig]],
+    candidates: list[Sequence[object]],
+    *,
+    auxiliary_store: PointInTimeFeatureStore | None = None,
+    auxiliary_feature_names: tuple[str, ...] | list[str] | None = None,
+    auxiliary_max_age_days: int | None = None,
+    auxiliary_min_coverage: float = 0.80,
 ) -> dict[str, RegimeSpecialistResult]:
-    """Evaluate candidate model/horizon pairs as specialists and keep one per regime."""
+    """Evaluate candidate model/horizon/feature specs and keep one per regime."""
 
     best: dict[str, RegimeSpecialistResult] = {}
     for regime in MarketRegime:
-        for horizon, model_config in candidates:
+        for candidate in candidates:
+            horizon, model_config, feature_columns = _unpack_candidate_spec(candidate)
+            uses_auxiliary = bool(feature_columns) and any(
+                name.startswith("aux__") for name in feature_columns
+            )
+            if uses_auxiliary and auxiliary_store is None:
+                raise ValueError(
+                    "regime specialist cannot replay auxiliary-feature candidate without its PointInTimeFeatureStore"
+                )
             result = run_regime_specialist(
                 bars,
                 metadata,
                 model_config,
                 regime=regime,
                 horizon=horizon,
+                feature_columns=feature_columns,
+                auxiliary_store=(auxiliary_store if uses_auxiliary else None),
+                auxiliary_feature_names=(auxiliary_feature_names if uses_auxiliary else None),
+                auxiliary_max_age_days=auxiliary_max_age_days,
+                auxiliary_min_coverage=auxiliary_min_coverage,
             )
             incumbent = best.get(regime.value)
             if incumbent is None or result.score > incumbent.score:
