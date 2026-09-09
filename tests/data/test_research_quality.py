@@ -3,6 +3,7 @@ import pandas as pd
 from stockbot.data.research_quality import (
     ResearchDataAttestation,
     evaluate_research_data_quality,
+    research_data_quality_fingerprint,
     verified_data_grade,
 )
 from stockbot.data.schemas import DataGrade
@@ -73,6 +74,25 @@ def test_complete_attested_point_in_time_dataset_is_research_grade_eligible():
     assert report.universe_report is not None
     assert report.universe_report.research_grade_universe
     assert verified_data_grade(DataGrade.RESEARCH_GRADE, report) is DataGrade.RESEARCH_GRADE
+
+
+def test_quality_fingerprint_is_deterministic_and_changes_with_evidence():
+    eligible = evaluate_research_data_quality(
+        _bars(),
+        universe=_universe(),
+        attestation=_attestation(),
+    )
+    same = evaluate_research_data_quality(
+        _bars(),
+        universe=_universe(),
+        attestation=_attestation(),
+    )
+    missing_attestation = evaluate_research_data_quality(
+        _bars(),
+        universe=_universe(),
+    )
+    assert research_data_quality_fingerprint(eligible) == research_data_quality_fingerprint(same)
+    assert research_data_quality_fingerprint(eligible) != research_data_quality_fingerprint(missing_attestation)
 
 
 def test_missing_attestation_and_universe_fail_closed():
