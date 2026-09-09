@@ -3,8 +3,15 @@ import json
 from stockbot.research.jobs import make_job_manifest, make_run_summary, write_json_record
 
 
+class _Readiness:
+    ready = True
+    score = 0.81
+    reasons = ()
+
+
 class _Candidate:
     experiment_id = "candidate-1"
+    paper_readiness = _Readiness()
 
 
 class _Champion:
@@ -147,7 +154,10 @@ def test_run_summary_and_atomic_json_writer(tmp_path):
     assert payload["experiments_run"] == 120
     assert payload["ensemble_score"] == 0.72
     assert payload["champion_experiment_id"] == "candidate-1"
+    assert payload["champion_paper_ready"] is True
+    assert payload["champion_paper_readiness_score"] == 0.81
+    assert payload["champion_paper_readiness_reasons"] == []
     assert payload["specialist_router_score"] == 0.66
     assert payload["specialist_scores"]["bull_trend"] == 1.2
     assert payload["specialist_candidate_pairs_tested"] == 4
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
