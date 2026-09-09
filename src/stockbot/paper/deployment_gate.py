@@ -58,6 +58,25 @@ def _quality_fingerprint(payload: dict) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def _readiness_fingerprint(summary: dict) -> str:
+    try:
+        score = summary["champion_paper_readiness_score"]
+        if score is None:
+            raise ValueError("research readiness score is missing")
+        payload = {
+            "ready": bool(summary["champion_paper_ready"]),
+            "score": float(score),
+            "reasons": [
+                str(value)
+                for value in (summary.get("champion_paper_readiness_reasons", ()) or ())
+            ],
+        }
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("research readiness evidence is invalid") from exc
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
 def _expected_effective_grade(payload: dict) -> DataGrade:
     try:
         declared = DataGrade(str(payload["declared_grade"]))
@@ -154,8 +173,15 @@ def verify_research_evidence_bundle(
     artifact_experiment_id = str(getattr(artifact_manifest, "experiment_id", ""))
     artifact_cycle_id = str(getattr(artifact_manifest, "research_cycle_id", ""))
     artifact_dataset_id = str(getattr(artifact_manifest, "source_dataset_fingerprint", ""))
+    artifact_readiness_fingerprint = str(
+        getattr(artifact_manifest, "research_readiness_fingerprint", "") or ""
+    ).strip()
     if not artifact_experiment_id or not artifact_cycle_id or not artifact_dataset_id:
         raise ValueError("frozen artifact research lineage is incomplete")
+    if not artifact_readiness_fingerprint:
+        raise ValueError("frozen artifact research readiness fingerprint is missing")
+    if _readiness_fingerprint(summary) != artifact_readiness_fingerprint:
+        raise ValueError("research readiness fingerprint mismatch")
     if str(summary.get("champion_experiment_id", "")) != artifact_experiment_id:
         raise ValueError("research champion experiment does not match frozen artifact experiment")
     if research_cycle_id != artifact_cycle_id:
