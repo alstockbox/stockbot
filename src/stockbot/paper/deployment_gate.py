@@ -21,6 +21,32 @@ class DeploymentEvidenceReport:
     reasons: tuple[str, ...]
 
 
+def _external_paper_provenance_complete(report: object | None) -> bool:
+    if report is None or not bool(getattr(report, "verified", False)):
+        return False
+    boolean_evidence = (
+        "artifact_verified",
+        "model_hash_verified",
+        "artifact_strategy_match",
+        "artifact_cycle_match",
+        "snapshot_timeline_verified",
+    )
+    if not all(bool(getattr(report, field, False)) for field in boolean_evidence):
+        return False
+    count_evidence = (
+        "signal_snapshots_verified",
+        "realization_snapshots_verified",
+        "observations_verified",
+    )
+    try:
+        if not all(int(getattr(report, field, 0)) > 0 for field in count_evidence):
+            return False
+    except (TypeError, ValueError):
+        return False
+    provenance_reasons = getattr(report, "reasons", None)
+    return provenance_reasons is not None and not tuple(provenance_reasons)
+
+
 def evaluate_deployment_evidence(
     *,
     research_ready: bool,
@@ -33,9 +59,10 @@ def evaluate_deployment_evidence(
 
     Forward-paper performance is not deployment evidence unless every session is bound
     to one frozen model artifact/research cycle with complete signal and realization
-    provenance *and* a separate verifier has confirmed that provenance against persisted
-    frozen artifacts and immutable snapshots. A high-performing manual, mixed-refit or
-    merely self-declared track therefore cannot satisfy the manual-live-review gate.
+    provenance *and* a separate verifier has confirmed the artifact identity/model hash,
+    strategy/cycle bindings, immutable signal/realization snapshots and timeline. A
+    high-performing manual, mixed-refit, partial or merely self-declared track therefore
+    cannot satisfy the manual-live-review gate.
     """
 
     research_grade = data_grade is DataGrade.RESEARCH_GRADE
@@ -44,8 +71,8 @@ def evaluate_deployment_evidence(
     paper_provenance = paper_report is not None and bool(
         getattr(paper_report, "frozen_provenance_complete", False)
     )
-    paper_external_provenance = paper_provenance_report is not None and bool(
-        getattr(paper_provenance_report, "verified", False)
+    paper_external_provenance = _external_paper_provenance_complete(
+        paper_provenance_report
     )
 
     reasons: list[str] = []
