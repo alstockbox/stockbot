@@ -298,6 +298,8 @@ class RiksbankMonetaryPolicyProvider:
             round_name = str(policy_round).strip()
             if _ROUND_PATTERN.fullmatch(round_name) is None and round_name != "latest":
                 raise ProviderError("Riksbank policy_round must be YYYY:N or 'latest'")
+            if round_name == "latest":
+                round_name = self.policy_round_names()[-1]
             params["policy_round_name"] = round_name
         url = f"{BASE_URL}?{urlencode(params)}"
         return self._transport.get_json(
