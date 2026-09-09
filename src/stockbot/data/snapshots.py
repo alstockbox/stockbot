@@ -242,6 +242,15 @@ class SnapshotStore:
         manifest = _manifest_from_dict(json.loads(manifest_path.read_text(encoding="utf-8")))
         if manifest.snapshot_id != snapshot_id:
             raise ValueError("snapshot manifest ID does not match directory")
+        if manifest.created_at.tzinfo is None:
+            raise ValueError("snapshot identity requires timezone-aware created_at")
+        provider_slug = re.sub(r"[^a-z0-9-]+", "-", manifest.provider.lower()).strip("-") or "provider"
+        expected_snapshot_id = (
+            f"{manifest.created_at.astimezone(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-"
+            f"{provider_slug}-{manifest.dataset_fingerprint[:8]}"
+        )
+        if expected_snapshot_id != snapshot_id:
+            raise ValueError("snapshot identity does not match manifest")
         bars = pd.read_csv(bars_path)
         bars["timestamp"] = pd.to_datetime(bars["timestamp"], utc=True)
         bars["retrieved_at"] = pd.to_datetime(bars["retrieved_at"], utc=True)
