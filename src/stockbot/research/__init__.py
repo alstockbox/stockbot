@@ -7,8 +7,10 @@ from stockbot.research.deep_diagnostics import CandidateDeepDiagnostics, DeepRes
 from stockbot.research.deep_feedback import (
     DeepResearchFinding,
     JsonlDeepResearchMemory,
+    ResearchCycleManifest,
     build_research_cycle_id,
     make_deep_findings,
+    make_research_cycle_manifest,
     rank_adaptive_parent_records,
 )
 from stockbot.research.drift import DriftReport, evaluate_return_drift
@@ -98,6 +100,7 @@ __all__ = [
     "RegimeRouterReport",
     "RegimeSpecialistDiagnostics",
     "RegimeSpecialistResult",
+    "ResearchCycleManifest",
     "ResearchFactory",
     "ResearchFactoryConfig",
     "ResearchGateCriteria",
@@ -144,6 +147,7 @@ __all__ = [
     "load_quarantine_manifest",
     "make_deep_findings",
     "make_job_manifest",
+    "make_research_cycle_manifest",
     "make_run_summary",
     "mine_hard_negatives",
     "persist_sealed_quarantine",
