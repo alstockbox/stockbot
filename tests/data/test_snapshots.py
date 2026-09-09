@@ -109,3 +109,19 @@ def test_snapshot_store_rejects_tampered_created_at_identity(tmp_path):
 
     with pytest.raises(ValueError, match="snapshot identity"):
         store.load(snapshot.snapshot_id)
+
+
+def test_snapshot_store_rejects_tampered_schema_version(tmp_path):
+    store = SnapshotStore(tmp_path)
+    snapshot = store.write(
+        _bars(),
+        _input(),
+        created_at=datetime(2026, 1, 10, 12, 0, tzinfo=timezone.utc),
+    )
+    manifest_path = snapshot.path / "manifest.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["schema_version"] = "999.0"
+    manifest_path.write_text(json.dumps(payload, sort_keys=True, indent=2), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="schema version"):
+        store.load(snapshot.snapshot_id)
