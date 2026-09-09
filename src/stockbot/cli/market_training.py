@@ -35,7 +35,7 @@ from stockbot.research.market_training import (
     train_snapshot,
 )
 from stockbot.research.population import ModelPopulationConfig
-from stockbot.research.quarantine import QuarantineConfig, load_quarantine_manifest
+from stockbot.research.quarantine import QuarantineConfig, load_quarantine_manifest, split_sealed_quarantine
 from stockbot.research.quarantine_audit import freeze_strategy_spec
 
 
@@ -401,8 +401,14 @@ def run_from_args(args: argparse.Namespace) -> int:
                     max_participation=args.factory_diagnostic_max_participation,
                     adv_window=args.factory_diagnostic_adv_window,
                 )
+                freeze_bars = snapshot.bars
+                if quarantine_config is not None:
+                    freeze_bars = split_sealed_quarantine(
+                        snapshot.bars,
+                        quarantine_config,
+                    ).development_bars
                 shadow_manifest = freeze_shadow_strategy(
-                    snapshot.bars,
+                    freeze_bars,
                     frozen_spec,
                     feature_names=champion.result.artifact.feature_names,
                     research_cycle_id=research_cycle_id,
