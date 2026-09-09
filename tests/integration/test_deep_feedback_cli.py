@@ -125,6 +125,19 @@ def test_factory_cli_binds_same_research_cycle_to_factory_and_deep_feedback(tmp_
     )
     assert factory_kwargs["research_cycle_id"] == expected_cycle
 
+    cycle = json.loads((run_dirs[0] / "research_cycle.json").read_text(encoding="utf-8"))
+    assert cycle["schema_version"] == 1
+    assert cycle["research_cycle_id"] == expected_cycle
+    assert cycle["dataset_fingerprint"] == "dataset-cycle-fingerprint"
+    assert cycle["quarantine_start"] is None
+    assert cycle["universe_fingerprint"] is None
+    assert cycle["auxiliary_fingerprint"] is None
+    assert cycle["quality_fingerprint"] == job["quality_fingerprint"]
+    assert cycle["deep_feedback_path"] == str(deep_path)
+    assert cycle["deep_feedback_weight"] == 0.30
+    assert "workers" not in cycle
+    assert "max_candidates" not in cycle
+
     output = capsys.readouterr().out
     assert f"research_cycle_id={expected_cycle}" in output
     assert f"deep_feedback_path={deep_path}" in output
