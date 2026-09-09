@@ -19,6 +19,17 @@ class _FakeTransport:
         return self.payload
 
 
+class _LatestTransport:
+    def __init__(self):
+        self.calls = []
+
+    def get_json(self, url, headers=None):
+        self.calls.append((url, headers or {}))
+        if url == f"{BASE_URL}/policy_rounds":
+            return {"data": ["2025:4", "2026:1", "2026:2"]}
+        return {"data": []}
+
+
 def _payload():
     return {
         "cutoffDate": "2025-02-12T08:00:00+01:00",
@@ -97,6 +108,19 @@ def test_fetch_series_payload_uses_documented_forecast_endpoint_and_round_query(
     assert "series=SEQRATENAYNA" in url
     assert "policy_round_name=2025%3A1" in url
     assert headers["Accept"] == "application/json"
+
+
+def test_latest_policy_round_alias_resolves_to_catalogue_id_before_fetch():
+    transport = _LatestTransport()
+    provider = RiksbankMonetaryPolicyProvider(transport=transport)
+    provider.fetch_series_payload("SEMCPIFNAYNA", policy_round="latest")
+
+    assert len(transport.calls) == 2
+    assert transport.calls[0][0] == f"{BASE_URL}/policy_rounds"
+    url, _ = transport.calls[1]
+    assert "series=SEMCPIFNAYNA" in url
+    assert "policy_round_name=2026%3A2" in url
+    assert "latest" not in url
 
 
 def test_realised_rows_use_vintage_cutoff_as_available_time_and_skip_future_targets():
