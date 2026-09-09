@@ -1,3 +1,4 @@
+import hashlib
 import json
 from types import SimpleNamespace
 
@@ -162,6 +163,11 @@ def test_deployment_review_cli_assembles_verified_evidence(tmp_path, monkeypatch
     assert payload["hard_risk_engine_required"] is True
     assert payload["broker_execution_available"] is False
     assert payload["reasons"] == []
+    identity_payload = {key: value for key, value in payload.items() if key != "review_id"}
+    expected_review_id = hashlib.sha256(
+        json.dumps(identity_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    assert payload["review_id"] == expected_review_id
 
     output = capsys.readouterr().out
     assert "eligible_for_manual_live_review=yes" in output
