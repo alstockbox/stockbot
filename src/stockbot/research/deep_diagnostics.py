@@ -286,6 +286,37 @@ def run_deep_research_diagnostics(
     )
 
 
+def _compact_neutralization(report: NeutralizationReport) -> dict[str, object]:
+    before = report.baseline_sector_exposure
+    after = report.neutralized_sector_exposure
+    return {
+        "baseline_score": report.baseline_score,
+        "neutralized_score": report.neutralized_score,
+        "score_delta": report.score_delta,
+        "sector_coverage": report.sector_coverage,
+        "prediction_coverage": report.prediction_coverage,
+        "sector_mean_before": report.average_abs_sector_mean_before,
+        "sector_mean_after": report.average_abs_sector_mean_after,
+        "factor_correlations_before": dict(report.factor_correlations_before),
+        "factor_correlations_after": dict(report.factor_correlations_after),
+        "neutralized_sharpe": report.neutralized_metrics.get("sharpe", 0.0),
+        "neutralized_cagr": report.neutralized_metrics.get("cagr", 0.0),
+        "neutralized_stress": report.neutralized_stress.score,
+        "executed_sector_coverage_before": before.sector_coverage,
+        "executed_sector_coverage_after": after.sector_coverage,
+        "average_max_sector_weight_before": before.average_max_sector_weight,
+        "average_max_sector_weight_after": after.average_max_sector_weight,
+        "worst_max_sector_weight_before": before.worst_max_sector_weight,
+        "worst_max_sector_weight_after": after.worst_max_sector_weight,
+        "sector_hhi_before": before.average_sector_hhi,
+        "sector_hhi_after": after.average_sector_hhi,
+        "active_sectors_before": before.average_active_sectors,
+        "active_sectors_after": after.average_active_sectors,
+        "unclassified_weight_before": before.average_unclassified_weight,
+        "unclassified_weight_after": after.average_unclassified_weight,
+    }
+
+
 def compact_deep_diagnostics(diagnostics: DeepResearchDiagnostics) -> dict[str, object]:
     """Produce a JSON-friendly summary without serializing prediction/return series."""
 
@@ -310,22 +341,11 @@ def compact_deep_diagnostics(diagnostics: DeepResearchDiagnostics) -> dict[str, 
     rows: dict[str, object] = {}
     for experiment_id, item in diagnostics.candidates.items():
         baseline_score = None if item.policy_arena.baseline is None else item.policy_arena.baseline.score
-        neutralization = None
-        if item.neutralization is not None:
-            neutralization = {
-                "baseline_score": item.neutralization.baseline_score,
-                "neutralized_score": item.neutralization.neutralized_score,
-                "score_delta": item.neutralization.score_delta,
-                "sector_coverage": item.neutralization.sector_coverage,
-                "prediction_coverage": item.neutralization.prediction_coverage,
-                "sector_mean_before": item.neutralization.average_abs_sector_mean_before,
-                "sector_mean_after": item.neutralization.average_abs_sector_mean_after,
-                "factor_correlations_before": dict(item.neutralization.factor_correlations_before),
-                "factor_correlations_after": dict(item.neutralization.factor_correlations_after),
-                "neutralized_sharpe": item.neutralization.neutralized_metrics.get("sharpe", 0.0),
-                "neutralized_cagr": item.neutralization.neutralized_metrics.get("cagr", 0.0),
-                "neutralized_stress": item.neutralization.neutralized_stress.score,
-            }
+        neutralization = (
+            None
+            if item.neutralization is None
+            else _compact_neutralization(item.neutralization)
+        )
 
         auxiliary_ablation = None
         if item.auxiliary_ablation is not None:
