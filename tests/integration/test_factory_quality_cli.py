@@ -120,5 +120,5 @@ def test_factory_runtime_binds_quality_evidence_to_job_training_and_artifact(tmp
     assert len(job["quality_fingerprint"]) == 64
     assert quality["quality_fingerprint"] == job["quality_fingerprint"]
     assert quality["research_grade_eligible"] is True
-    assert quality["declared_grade"] == "BOOTSTRAP"
-    assert quality["effective_grade"] == "BOOTSTRAP"
+    assert quality["declared_grade"] == DataGrade.BOOTSTRAP.value
+    assert quality["effective_grade"] == DataGrade.BOOTSTRAP.value
