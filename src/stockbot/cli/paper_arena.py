@@ -220,6 +220,7 @@ def _run_shadow_cycle(args: argparse.Namespace) -> int:
             "shadow_artifact_id": artifact.artifact_id,
             "research_cycle_id": artifact.research_cycle_id,
         },
+        reuse_identical=True,
     )
     print(f"refreshed_snapshot_id={snapshot.snapshot_id}")
     print(f"refreshed_snapshot_fingerprint={snapshot.manifest.dataset_fingerprint}")
