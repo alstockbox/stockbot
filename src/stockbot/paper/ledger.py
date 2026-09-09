@@ -19,7 +19,13 @@ class PaperObservation:
     signal_count: int = 0
     regime: str | None = None
     notes: str | None = None
-    schema_version: int = 1
+    research_cycle_id: str | None = None
+    model_artifact_id: str | None = None
+    signal_timestamp: str | None = None
+    signal_snapshot_fingerprint: str | None = None
+    realization_snapshot_fingerprint: str | None = None
+    gross_return: float | None = None
+    schema_version: int = 2
 
     def __post_init__(self) -> None:
         if not self.strategy_id:
@@ -28,6 +34,11 @@ class PaperObservation:
             datetime.fromisoformat(self.timestamp.replace("Z", "+00:00"))
         except ValueError as exc:
             raise ValueError("timestamp must be ISO-8601") from exc
+        if self.signal_timestamp is not None:
+            try:
+                datetime.fromisoformat(self.signal_timestamp.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise ValueError("signal_timestamp must be ISO-8601") from exc
         for name, value in (
             ("net_return", self.net_return),
             ("benchmark_return", self.benchmark_return),
@@ -37,6 +48,8 @@ class PaperObservation:
         ):
             if not math.isfinite(float(value)):
                 raise ValueError(f"{name} must be finite")
+        if self.gross_return is not None and not math.isfinite(float(self.gross_return)):
+            raise ValueError("gross_return must be finite")
         if self.turnover < 0.0 or self.cost_rate < 0.0:
             raise ValueError("turnover and cost_rate must be non-negative")
         if not 0.0 <= self.fill_rate <= 1.0:
@@ -90,6 +103,12 @@ def make_paper_observation(
     regime: str | None = None,
     timestamp: str | None = None,
     notes: str | None = None,
+    research_cycle_id: str | None = None,
+    model_artifact_id: str | None = None,
+    signal_timestamp: str | None = None,
+    signal_snapshot_fingerprint: str | None = None,
+    realization_snapshot_fingerprint: str | None = None,
+    gross_return: float | None = None,
 ) -> PaperObservation:
     return PaperObservation(
         strategy_id=strategy_id,
@@ -102,4 +121,10 @@ def make_paper_observation(
         signal_count=int(signal_count),
         regime=regime,
         notes=notes,
+        research_cycle_id=research_cycle_id,
+        model_artifact_id=model_artifact_id,
+        signal_timestamp=signal_timestamp,
+        signal_snapshot_fingerprint=signal_snapshot_fingerprint,
+        realization_snapshot_fingerprint=realization_snapshot_fingerprint,
+        gross_return=(None if gross_return is None else float(gross_return)),
     )
