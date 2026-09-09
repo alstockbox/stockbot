@@ -80,6 +80,29 @@ def test_new_future_rows_remain_in_same_sealed_quarantine():
     assert second.manifest.quarantine_rows > first.manifest.quarantine_rows
 
 
+def test_quarantine_identity_changes_when_sealed_market_content_changes():
+    bars = _bars()
+    config = QuarantineConfig(
+        start="2025-03-03",
+        min_development_periods=250,
+        min_quarantine_periods=40,
+    )
+    first = split_sealed_quarantine(bars, config)
+
+    changed = bars.copy()
+    timestamps = pd.to_datetime(changed["timestamp"], utc=True)
+    target = changed.index[(timestamps >= pd.Timestamp("2025-03-03", tz="UTC")) & (changed["symbol"] == "AAA")][0]
+    changed.loc[target, "close"] = float(changed.loc[target, "close"]) + 0.01
+    second = split_sealed_quarantine(changed, config)
+
+    assert second.manifest.start == first.manifest.start
+    assert second.manifest.development_rows == first.manifest.development_rows
+    assert second.manifest.quarantine_rows == first.manifest.quarantine_rows
+    assert second.manifest.development_periods == first.manifest.development_periods
+    assert second.manifest.quarantine_periods == first.manifest.quarantine_periods
+    assert second.manifest.quarantine_id != first.manifest.quarantine_id
+
+
 def test_sealed_boundary_cannot_be_silently_rotated():
     split = split_sealed_quarantine(
         _bars(),
