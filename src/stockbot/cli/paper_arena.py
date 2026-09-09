@@ -15,10 +15,15 @@ from stockbot.data.providers.yahoo_bootstrap import YahooBootstrapProvider
 from stockbot.data.research_inputs import load_point_in_time_feature_store
 from stockbot.data.snapshots import SnapshotStore
 from stockbot.paper.arena import PaperArenaCriteria, evaluate_paper_track
+from stockbot.paper.deployment_gate import (
+    evaluate_bound_deployment_review,
+    verify_research_evidence_bundle,
+)
 from stockbot.paper.ledger import PaperTradingLedger, make_paper_observation
 from stockbot.paper.locking import exclusive_shadow_command_lock, shadow_command_lock_path
 from stockbot.paper.provenance import verify_frozen_paper_provenance
 from stockbot.paper.runner import load_frozen_shadow_artifact, run_shadow_step
+from stockbot.research.quarantine_audit import load_verified_quarantine_audit_record
 
 
 def _parse_names(value: str | None) -> tuple[str, ...] | None:
@@ -125,6 +130,37 @@ def build_parser() -> argparse.ArgumentParser:
     )
     status.add_argument("--min-sessions", type=int, default=60)
     status.add_argument("--min-span-days", type=int, default=45)
+
+    deployment_review = subparsers.add_parser(
+        "deployment-review",
+        help=(
+            "Assemble independently verified research, sealed-quarantine and forward-paper "
+            "evidence for manual live review only"
+        ),
+    )
+    deployment_review.add_argument("--artifact", required=True, help="Frozen shadow artifact directory")
+    deployment_review.add_argument(
+        "--snapshot-root",
+        required=True,
+        help="Root directory containing immutable snapshots referenced by the paper ledger",
+    )
+    deployment_review.add_argument(
+        "--research-run",
+        required=True,
+        help="Research run directory containing job/cycle/quality/summary evidence",
+    )
+    deployment_review.add_argument(
+        "--audit-ledger",
+        required=True,
+        help="Integrity-verified sealed-quarantine audit ledger JSON",
+    )
+    deployment_review.add_argument(
+        "--report",
+        default=None,
+        help="Optional atomic machine-readable deployment review JSON report",
+    )
+    deployment_review.add_argument("--min-sessions", type=int, default=60)
+    deployment_review.add_argument("--min-span-days", type=int, default=45)
     return parser
 
 
@@ -341,6 +377,40 @@ def _successful_status_report(report, provenance_report) -> dict:
     }
 
 
+def _successful_deployment_review_report(artifact, research, audit, paper_report, provenance_report, review) -> dict:
+    if bool(getattr(review, "broker_execution_available", False)):
+        raise ValueError("deployment review may not enable broker execution")
+    return {
+        "schema_version": 1,
+        "status": "ok",
+        "strategy_id": str(artifact.strategy_id),
+        "artifact_id": str(artifact.artifact_id),
+        "experiment_id": str(artifact.experiment_id),
+        "research_cycle_id": str(artifact.research_cycle_id),
+        "dataset_fingerprint": str(research.dataset_fingerprint),
+        "quality_fingerprint": str(research.quality_fingerprint),
+        "quarantine_start": research.quarantine_start,
+        "audit_id": getattr(audit, "audit_id", None),
+        "research_ready": bool(review.research_ready),
+        "research_grade": bool(review.research_grade),
+        "quarantine_audit_passed": bool(review.quarantine_audit_passed),
+        "paper_live_evidence_eligible": bool(review.paper_live_evidence_eligible),
+        "paper_frozen_provenance_complete": bool(review.paper_frozen_provenance_complete),
+        "paper_external_provenance_verified": bool(review.paper_external_provenance_verified),
+        "paper_sessions": int(paper_report.sessions),
+        "paper_live_span_days": int(paper_report.live_span_days),
+        "external_provenance_verified": bool(provenance_report.verified),
+        "artifact_verified": bool(provenance_report.artifact_verified),
+        "model_hash_verified": bool(provenance_report.model_hash_verified),
+        "snapshot_timeline_verified": bool(provenance_report.snapshot_timeline_verified),
+        "observations_verified": int(provenance_report.observations_verified),
+        "hard_risk_engine_required": bool(review.hard_risk_engine_required),
+        "eligible_for_manual_live_review": bool(review.eligible_for_manual_live_review),
+        "reasons": list(review.reasons),
+        "broker_execution_available": False,
+    }
+
+
 def _run_shadow_cycle(args: argparse.Namespace) -> int:
     artifact = load_frozen_shadow_artifact(args.artifact)
     if args.start is None:
@@ -472,6 +542,65 @@ def run_from_args(args: argparse.Namespace) -> int:
             print(f"research_cycle_id={report.research_cycle_id}")
         print(f"live_evidence_eligible={'yes' if report.live_eligible else 'no'}")
         print("reasons=" + (",".join(report.reasons) if report.reasons else "none"))
+        print("broker_execution=disabled")
+        return 0
+
+    if args.command == "deployment-review":
+        artifact = load_frozen_shadow_artifact(args.artifact)
+        research = verify_research_evidence_bundle(
+            args.research_run,
+            artifact_manifest=artifact,
+        )
+        if research.quarantine_start is None:
+            raise ValueError("deployment review requires sealed research quarantine boundary")
+        audit = load_verified_quarantine_audit_record(
+            args.audit_ledger,
+            quarantine_start=research.quarantine_start,
+            strategy_id=artifact.strategy_id,
+        )
+        records = ledger.records(strategy_id=artifact.strategy_id)
+        if not records:
+            raise ValueError("no paper observations found for frozen strategy")
+        criteria = PaperArenaCriteria(
+            min_sessions=args.min_sessions,
+            min_live_span_days=args.min_span_days,
+            require_frozen_provenance=True,
+        )
+        paper_report = evaluate_paper_track(records, criteria=criteria)
+        provenance_report = verify_frozen_paper_provenance(
+            records,
+            artifact_dir=args.artifact,
+            snapshot_root=args.snapshot_root,
+        )
+        review = evaluate_bound_deployment_review(
+            research_evidence=research,
+            artifact_manifest=artifact,
+            quarantine_audit_record=audit,
+            paper_report=paper_report,
+            paper_provenance_report=provenance_report,
+        )
+        if args.report:
+            _write_json_atomic(
+                args.report,
+                _successful_deployment_review_report(
+                    artifact,
+                    research,
+                    audit,
+                    paper_report,
+                    provenance_report,
+                    review,
+                ),
+            )
+        print(f"strategy_id={artifact.strategy_id}")
+        print(f"artifact_id={artifact.artifact_id}")
+        print(f"experiment_id={artifact.experiment_id}")
+        print(f"research_cycle_id={artifact.research_cycle_id}")
+        print(
+            "eligible_for_manual_live_review="
+            f"{'yes' if review.eligible_for_manual_live_review else 'no'}"
+        )
+        print("reasons=" + (",".join(review.reasons) if review.reasons else "none"))
+        print("hard_risk_engine_required=yes")
         print("broker_execution=disabled")
         return 0
 
