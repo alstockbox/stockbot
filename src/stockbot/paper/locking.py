@@ -27,7 +27,7 @@ def shadow_command_lock_path(state_path: str | Path, explicit_lock: str | Path |
 
 
 def paper_ledger_write_lock_path(ledger_path: str | Path) -> Path:
-    """Return the per-ledger writer lock path."""
+    """Return the lock path shared by ledger readers and the exclusive writer."""
 
     return Path(str(Path(ledger_path)) + ".lock")
 
@@ -80,6 +80,35 @@ def _acquire_exclusive_lock(
             handle.close()
 
 
+def _acquire_shared_lock(
+    path: str | Path,
+    *,
+    unavailable_message: str,
+) -> Iterator[None]:
+    if fcntl is None:
+        raise ValueError(unavailable_message)
+
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    handle = target.open("a+", encoding="utf-8")
+    acquired = False
+    try:
+        # Intentionally blocking: the writer critical section is short and a verified
+        # reader must observe either the state before the commit or the fully committed
+        # ledger+checkpoint pair, never the transient interval between them.
+        fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
+        acquired = True
+        yield
+    finally:
+        if acquired:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            finally:
+                handle.close()
+        else:
+            handle.close()
+
+
 @contextmanager
 def exclusive_shadow_command_lock(path: str | Path) -> Iterator[None]:
     """Acquire a non-blocking process lock for one shadow command critical section.
@@ -98,14 +127,24 @@ def exclusive_shadow_command_lock(path: str | Path) -> Iterator[None]:
 
 @contextmanager
 def exclusive_paper_ledger_write_lock(path: str | Path) -> Iterator[None]:
-    """Serialize verify-and-append operations for one paper ledger.
+    """Serialize verify-and-commit operations for one paper ledger.
 
-    Reads remain lock-free and integrity-verifying. The OS releases the writer lock on
-    process termination, so a crash cannot leave a stale ownership marker behind.
+    The OS releases the writer lock on process termination, so a crash cannot leave a
+    stale ownership marker behind. Verified readers coordinate through a shared lock.
     """
 
     yield from _acquire_exclusive_lock(
         path,
         unavailable_message="paper ledger writer locking requires POSIX fcntl support",
         busy_message="paper ledger is already being written",
+    )
+
+
+@contextmanager
+def shared_paper_ledger_read_lock(path: str | Path) -> Iterator[None]:
+    """Wait for any in-flight ledger writer, then hold a shared verified-read lock."""
+
+    yield from _acquire_shared_lock(
+        path,
+        unavailable_message="paper ledger reader locking requires POSIX fcntl support",
     )
