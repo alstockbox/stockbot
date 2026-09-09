@@ -33,6 +33,35 @@ def _payload():
     }
 
 
+def _live_payload():
+    """Representative Monetary Policy Data v1 production response observed 2026-09-10."""
+
+    return {
+        "data": [
+            {
+                "external_id": "SEMCPIFNAYNA",
+                "metadata": {
+                    "decimals": 2,
+                    "description": "CPIF",
+                    "unit": "Annual percentage change",
+                },
+                "vintages": {
+                    "metadata": {
+                        "forecast_cutoff_date": "2026-02-28",
+                        "policy_round": "2026:1",
+                        "policy_round_end_dtm": "2026-03-19",
+                    },
+                    "observations": [
+                        {"dt": "2026-01-31", "value": 2.0},
+                        {"dt": "2026-02-28", "value": 1.7},
+                        {"dt": "2026-06-30", "value": 1.5},
+                    ],
+                },
+            }
+        ]
+    }
+
+
 def test_fetch_series_payload_uses_documented_forecast_endpoint_and_round_query():
     transport = _FakeTransport({"data": []})
     provider = RiksbankMonetaryPolicyProvider(transport=transport)
@@ -61,6 +90,20 @@ def test_realised_rows_use_vintage_cutoff_as_available_time_and_skip_future_targ
     assert all(row.available_time == "2025-02-12T07:00:00+00:00" for row in observations)
     assert all("series=SEQRATENAYNA" in (row.revision_id or "") for row in observations)
     assert all("round=2025:1" in (row.revision_id or "") for row in observations)
+
+
+def test_live_nested_schema_uses_policy_round_publication_time_without_forecast_leakage():
+    provider = RiksbankMonetaryPolicyProvider(transport=_FakeTransport())
+    observations = provider.observations_from_payload(
+        _live_payload(),
+        feature_name="cpif_yoy",
+        series_id="SEMCPIFNAYNA",
+    )
+
+    assert [row.value for row in observations] == [2.0, 1.7]
+    assert all(row.available_time == "2026-03-19T00:00:00+00:00" for row in observations)
+    assert all("round=2026:1" in (row.revision_id or "") for row in observations)
+    assert all(row.observation_time < row.available_time for row in observations)
 
 
 def test_missing_cutoff_or_publication_time_fails_closed():
