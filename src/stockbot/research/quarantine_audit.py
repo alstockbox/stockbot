@@ -165,6 +165,8 @@ def load_verified_quarantine_audit_record(
     ]
     if not same_cycle:
         raise ValueError("verified quarantine audit not found for sealed cycle")
+    if len(same_cycle) != 1:
+        raise ValueError("multiple verified quarantine audits found for sealed cycle")
     record = same_cycle[0]
     if record.strategy_id != str(strategy_id):
         raise ValueError("verified quarantine audit strategy mismatch")
