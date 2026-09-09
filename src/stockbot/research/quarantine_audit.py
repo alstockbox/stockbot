@@ -14,7 +14,7 @@ from stockbot.research.holdout import HoldoutConfig, HoldoutReport, evaluate_bli
 from stockbot.research.quarantine import QuarantineConfig, QuarantineManifest, split_sealed_quarantine
 
 
-_AUDIT_SCHEMA_VERSION = 1
+_AUDIT_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -40,6 +40,7 @@ class QuarantineAuditRecord:
     passed: bool
     reasons: tuple[str, ...]
     audited_at: str
+    research_cycle_id: str = ""
     schema_version: int = _AUDIT_SCHEMA_VERSION
 
 
@@ -85,6 +86,7 @@ def _audit_identity_payload(
     passed: bool,
     reasons: tuple[str, ...],
     audited_at: str,
+    research_cycle_id: str = "",
 ) -> dict[str, Any]:
     return {
         "quarantine_start": str(quarantine_start),
@@ -95,6 +97,7 @@ def _audit_identity_payload(
         "passed": bool(passed),
         "reasons": tuple(str(value) for value in reasons),
         "audited_at": str(audited_at),
+        "research_cycle_id": str(research_cycle_id),
     }
 
 
@@ -115,6 +118,7 @@ def _verify_audit_record(record: QuarantineAuditRecord) -> None:
         passed=record.passed,
         reasons=record.reasons,
         audited_at=record.audited_at,
+        research_cycle_id=record.research_cycle_id,
     )
     if _audit_id(identity) != str(record.audit_id):
         raise ValueError("quarantine audit integrity violation: audit ID mismatch")
@@ -154,6 +158,7 @@ def load_verified_quarantine_audit_record(
     *,
     quarantine_start: str,
     strategy_id: str,
+    research_cycle_id: str | None = None,
 ) -> QuarantineAuditRecord:
     """Return the integrity-verified audit record for one sealed cycle and strategy."""
 
@@ -170,6 +175,8 @@ def load_verified_quarantine_audit_record(
     record = same_cycle[0]
     if record.strategy_id != str(strategy_id):
         raise ValueError("verified quarantine audit strategy mismatch")
+    if research_cycle_id is not None and record.research_cycle_id != str(research_cycle_id).strip():
+        raise ValueError("verified quarantine audit research cycle mismatch")
     return record
 
 
@@ -208,6 +215,7 @@ def run_single_quarantine_audit(
     *,
     ledger_path: str | Path,
     holdout_config: HoldoutConfig | None = None,
+    research_cycle_id: str | None = None,
 ) -> QuarantineAuditResult:
     """Audit exactly one frozen strategy per sealed quarantine research cycle.
 
@@ -216,6 +224,10 @@ def run_single_quarantine_audit(
     probing from becoming another hyperparameter-selection loop. Persisted audit records
     are identity-verified before reuse so a changed pass/fail result fails closed.
     """
+
+    cycle_id = "" if research_cycle_id is None else str(research_cycle_id).strip()
+    if research_cycle_id is not None and not cycle_id:
+        raise ValueError("research_cycle_id cannot be empty")
 
     split = split_sealed_quarantine(bars, quarantine_config)
     records = _load_ledger(ledger_path)
@@ -243,6 +255,7 @@ def run_single_quarantine_audit(
         passed=bool(report.passed),
         reasons=tuple(report.reasons),
         audited_at=audited_at,
+        research_cycle_id=cycle_id,
     )
     record = QuarantineAuditRecord(
         audit_id=_audit_id(identity),
