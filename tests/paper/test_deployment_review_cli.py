@@ -81,10 +81,15 @@ def test_deployment_review_cli_assembles_verified_evidence(tmp_path, monkeypatch
         lambda run_dir, *, artifact_manifest: research,
         raising=False,
     )
+
+    def load_audit(path, *, quarantine_start, strategy_id, research_cycle_id):
+        assert research_cycle_id == "cycle-a"
+        return audit
+
     monkeypatch.setattr(
         paper_cli,
         "load_verified_quarantine_audit_record",
-        lambda path, *, quarantine_start, strategy_id: audit,
+        load_audit,
         raising=False,
     )
     monkeypatch.setattr(
