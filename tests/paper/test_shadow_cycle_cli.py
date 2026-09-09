@@ -95,6 +95,7 @@ def test_shadow_cycle_refreshes_exact_frozen_universe_and_steps_new_snapshot(tmp
     assert captured["end"] == "2026-09-09"
     assert captured["download_kwargs"]["provenance"]["shadow_artifact_id"] == artifact.artifact_id
     assert captured["download_kwargs"]["provenance"]["research_cycle_id"] == artifact.research_cycle_id
+    assert captured["download_kwargs"]["reuse_identical"] is True
     assert captured["step_bars"] is refreshed.bars
     assert captured["step_kwargs"]["snapshot_fingerprint"] == refreshed.manifest.dataset_fingerprint
 
@@ -143,6 +144,7 @@ def test_shadow_cycle_explicit_start_can_bootstrap_without_existing_snapshot(tmp
     def fake_download(provider, symbols, start, end, store, **kwargs):
         captured["start"] = str(start)
         captured["end"] = str(end)
+        captured["reuse_identical"] = kwargs.get("reuse_identical")
         return refreshed
 
     monkeypatch.setattr(paper_cli, "download_market_snapshot", fake_download, raising=False)
@@ -159,4 +161,4 @@ def test_shadow_cycle_explicit_start_can_bootstrap_without_existing_snapshot(tmp
         ]
     )
     assert paper_cli.run_from_args(args) == 0
-    assert captured == {"start": "2025-01-01", "end": "2026-09-09"}
+    assert captured == {"start": "2025-01-01", "end": "2026-09-09", "reuse_identical": True}
