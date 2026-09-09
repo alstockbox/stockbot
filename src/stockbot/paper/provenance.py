@@ -19,6 +19,15 @@ class PaperProvenanceVerificationReport:
     snapshots_verified: int
     verified: bool
     broker_execution_available: bool = False
+    artifact_verified: bool = False
+    model_hash_verified: bool = False
+    artifact_strategy_match: bool = False
+    artifact_cycle_match: bool = False
+    signal_snapshots_verified: int = 0
+    realization_snapshots_verified: int = 0
+    snapshot_timeline_verified: bool = False
+    observations_verified: int = 0
+    reasons: tuple[str, ...] = ()
 
 
 def _required_single_value(
@@ -207,6 +216,8 @@ def verify_frozen_paper_provenance(
 
     store = SnapshotStore(snapshot_root)
     verified_snapshots: dict[str, object] = {}
+    verified_signal_fingerprints: set[str] = set()
+    verified_realization_fingerprints: set[str] = set()
     for row in ordered:
         signal_timestamp = _required_text(row, "signal_timestamp", "signal timestamp")
         signal_fingerprint = _required_text(
@@ -229,6 +240,7 @@ def verify_frozen_paper_provenance(
             research_cycle_id=research_cycle_id,
         )
         verified_snapshots[signal_fingerprint] = signal_snapshot
+        verified_signal_fingerprints.add(signal_fingerprint)
         realization_snapshot = _verify_snapshot(
             store,
             realization_fingerprint,
@@ -238,6 +250,7 @@ def verify_frozen_paper_provenance(
             research_cycle_id=research_cycle_id,
         )
         verified_snapshots[realization_fingerprint] = realization_snapshot
+        verified_realization_fingerprints.add(realization_fingerprint)
 
     fingerprints = tuple(sorted(verified_snapshots))
     return PaperProvenanceVerificationReport(
@@ -248,4 +261,13 @@ def verify_frozen_paper_provenance(
         snapshots_verified=len(fingerprints),
         verified=True,
         broker_execution_available=False,
+        artifact_verified=True,
+        model_hash_verified=True,
+        artifact_strategy_match=True,
+        artifact_cycle_match=True,
+        signal_snapshots_verified=len(verified_signal_fingerprints),
+        realization_snapshots_verified=len(verified_realization_fingerprints),
+        snapshot_timeline_verified=True,
+        observations_verified=len(ordered),
+        reasons=(),
     )
