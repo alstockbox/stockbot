@@ -69,6 +69,23 @@ def test_cli_parser_accepts_point_in_time_research_inputs(tmp_path):
     assert args.factory_deep_diagnostics is True
 
 
+def test_cli_parser_accepts_explicit_research_data_attestations():
+    parser = build_parser()
+    args = parser.parse_args([
+        "--provider", "yahoo-bootstrap",
+        "--symbols", "AAPL,MSFT",
+        "--start", "2020-01-01",
+        "--end", "2025-12-31",
+        "--factory",
+        "--factory-attest-adjusted-prices-verified",
+        "--factory-attest-corporate-actions-complete",
+        "--factory-attest-corporate-actions-point-in-time",
+    ])
+    assert args.factory_attest_adjusted_prices_verified is True
+    assert args.factory_attest_corporate_actions_complete is True
+    assert args.factory_attest_corporate_actions_point_in_time is True
+
+
 def test_resolve_provider_requires_tiingo_token(monkeypatch):
     monkeypatch.delenv("TIINGO_API_TOKEN", raising=False)
     with pytest.raises(ProviderError, match="TIINGO_API_TOKEN"):
