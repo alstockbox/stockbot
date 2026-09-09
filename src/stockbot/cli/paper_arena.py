@@ -118,6 +118,11 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Root directory containing immutable StockBot snapshots referenced by the paper ledger",
     )
+    status.add_argument(
+        "--report",
+        default=None,
+        help="Optional atomic machine-readable JSON status report for schedulers and monitoring",
+    )
     status.add_argument("--min-sessions", type=int, default=60)
     status.add_argument("--min-span-days", type=int, default=45)
     return parser
@@ -300,6 +305,33 @@ def _successful_cycle_report(args: argparse.Namespace, artifact, snapshot, resul
     }
 
 
+def _successful_status_report(report, provenance_report) -> dict:
+    if bool(getattr(provenance_report, "broker_execution_available", False)):
+        raise ValueError("paper provenance verification may not enable broker execution")
+    return {
+        "schema_version": 1,
+        "status": "ok",
+        "strategy_id": report.strategy_id,
+        "sessions": int(report.sessions),
+        "live_span_days": int(report.live_span_days),
+        "paper_sharpe": float(report.metrics.get("sharpe", float("nan"))),
+        "paper_cagr": float(report.metrics.get("cagr", float("nan"))),
+        "paper_excess_cagr": float(report.excess_cagr),
+        "paper_max_drawdown": float(report.metrics.get("max_drawdown", float("nan"))),
+        "average_fill_rate": float(report.average_fill_rate),
+        "evidence_score": float(report.evidence_score),
+        "frozen_provenance_complete": bool(report.frozen_provenance_complete),
+        "external_provenance_verified": bool(provenance_report.verified),
+        "verified_snapshots": int(provenance_report.snapshots_verified),
+        "snapshot_fingerprints": list(provenance_report.snapshot_fingerprints),
+        "model_artifact_id": report.model_artifact_id,
+        "research_cycle_id": report.research_cycle_id,
+        "live_evidence_eligible": bool(report.live_eligible),
+        "reasons": list(report.reasons),
+        "broker_execution_available": False,
+    }
+
+
 def _run_shadow_cycle(args: argparse.Namespace) -> int:
     artifact = load_frozen_shadow_artifact(args.artifact)
     if args.start is None:
@@ -404,6 +436,11 @@ def run_from_args(args: argparse.Namespace) -> int:
             artifact_dir=args.artifact,
             snapshot_root=args.snapshot_root,
         )
+        if args.report:
+            _write_json_atomic(
+                args.report,
+                _successful_status_report(report, provenance_report),
+            )
         print(f"strategy_id={report.strategy_id}")
         print(f"sessions={report.sessions}")
         print(f"live_span_days={report.live_span_days}")
