@@ -118,6 +118,8 @@ def test_paper_status_requires_frozen_provenance(monkeypatch, tmp_path, capsys):
             evidence_score=0.0,
             live_eligible=False,
             frozen_provenance_complete=False,
+            model_artifact_id=None,
+            research_cycle_id=None,
             reasons=("paper_frozen_provenance",),
         )
 
