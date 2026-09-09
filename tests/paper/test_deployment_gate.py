@@ -355,6 +355,21 @@ def test_research_evidence_rejects_non_finite_readiness_even_when_fingerprint_ma
         )
 
 
+def test_research_evidence_requires_boolean_readiness_claim_even_when_fingerprint_matches(tmp_path):
+    run_dir, artifact = _write_research_bundle(tmp_path)
+    summary_path = run_dir / "summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["champion_paper_ready"] = "false"
+    summary_path.write_text(json.dumps(summary, sort_keys=True, indent=2), encoding="utf-8")
+    artifact.research_readiness_fingerprint = _readiness_fingerprint(summary)
+
+    with pytest.raises(ValueError, match="readiness"):
+        deployment_gate_module.verify_research_evidence_bundle(
+            run_dir,
+            artifact_manifest=artifact,
+        )
+
+
 def test_research_evidence_recomputes_quality_eligibility_from_primitives(tmp_path):
     run_dir, artifact = _write_research_bundle(tmp_path)
     _rebind_semantically_invalid_quality_bundle(run_dir, artifact)
