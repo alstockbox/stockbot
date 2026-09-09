@@ -6,6 +6,8 @@ import json
 import os
 from pathlib import Path
 
+import pandas as pd
+
 from stockbot.data.download import DownloadError, download_market_snapshot
 from stockbot.data.providers.http import ProviderError
 from stockbot.data.providers.tiingo import TiingoProvider
@@ -38,7 +40,12 @@ def _add_shadow_step_arguments(parser: argparse.ArgumentParser, *, explicit_snap
         default=None,
         help="Optional exclusive process-lock file; defaults to <state>.lock",
     )
-    parser.add_argument("--data-age-seconds", type=float, default=0.0)
+    parser.add_argument(
+        "--data-age-seconds",
+        type=float,
+        default=None,
+        help="Optional explicit feed-age override; otherwise derived from verified snapshot retrieval time",
+    )
     parser.add_argument("--kill-switch", action="store_true", help="Force the hard risk engine to zero all next targets")
     parser.add_argument("--auxiliary-input", default=None, help="Fingerprint-verified point-in-time auxiliary feature store")
     parser.add_argument("--auxiliary-features", default=None, help="Optional comma-separated auxiliary feature subset")
@@ -126,7 +133,7 @@ def _write_json_atomic(path: str | Path, payload: dict) -> None:
 
 
 def _validate_shadow_args(args: argparse.Namespace):
-    if args.data_age_seconds < 0.0:
+    if args.data_age_seconds is not None and args.data_age_seconds < 0.0:
         raise ValueError("data age seconds cannot be negative")
     if args.auxiliary_max_age_days is not None and args.auxiliary_max_age_days < 0:
         raise ValueError("auxiliary max age days cannot be negative")
@@ -141,6 +148,24 @@ def _validate_shadow_args(args: argparse.Namespace):
         else load_point_in_time_feature_store(args.auxiliary_input)
     )
     return auxiliary_names, auxiliary_store
+
+
+def _snapshot_data_age_seconds(snapshot, *, now: datetime | None = None) -> float:
+    if "retrieved_at" not in snapshot.bars.columns or snapshot.bars.empty:
+        raise ValueError("verified snapshot is missing retrieval-time freshness evidence")
+    retrieved = pd.to_datetime(snapshot.bars["retrieved_at"], utc=True, errors="coerce")
+    if retrieved.isna().any():
+        raise ValueError("verified snapshot contains invalid retrieval-time freshness evidence")
+
+    reference = now or datetime.now(timezone.utc)
+    if reference.tzinfo is None:
+        raise ValueError("freshness reference time must be timezone-aware")
+    reference = reference.astimezone(timezone.utc)
+    newest = retrieved.max().to_pydatetime()
+    oldest = retrieved.min().to_pydatetime()
+    if newest > reference:
+        raise ValueError("verified snapshot retrieval timestamp is in the future")
+    return float((reference - oldest).total_seconds())
 
 
 def _parse_snapshot_time(value: str) -> datetime:
@@ -188,15 +213,24 @@ def _select_latest_compatible_snapshot(snapshot_root: str | Path, artifact_symbo
     return max(compatible, key=lambda item: (item[0], item[1], item[2]))[3]
 
 
-def _execute_shadow_snapshot(args: argparse.Namespace, snapshot):
+def _execute_shadow_snapshot(args: argparse.Namespace, snapshot, *, provider_refresh_verified: bool = False):
     auxiliary_names, auxiliary_store = _validate_shadow_args(args)
+    if args.data_age_seconds is not None:
+        data_age_seconds = float(args.data_age_seconds)
+    elif provider_refresh_verified:
+        # The cycle command reaches this path only after the provider refresh has
+        # completed successfully in the current process. An identical persisted
+        # snapshot may be reused, but the market dataset was just re-verified.
+        data_age_seconds = 0.0
+    else:
+        data_age_seconds = _snapshot_data_age_seconds(snapshot)
     return run_shadow_step(
         snapshot.bars,
         artifact_dir=args.artifact,
         state_path=args.state,
         ledger_path=args.ledger,
         snapshot_fingerprint=snapshot.manifest.dataset_fingerprint,
-        data_age_seconds=args.data_age_seconds,
+        data_age_seconds=data_age_seconds,
         kill_switch=args.kill_switch,
         auxiliary_store=auxiliary_store,
         auxiliary_feature_names=auxiliary_names,
@@ -290,7 +324,7 @@ def _run_shadow_cycle(args: argparse.Namespace) -> int:
         reuse_identical=True,
     )
     snapshot_status = "reused" if snapshot.snapshot_id in existing_snapshot_ids else "new"
-    result = _execute_shadow_snapshot(args, snapshot)
+    result = _execute_shadow_snapshot(args, snapshot, provider_refresh_verified=True)
     if args.report:
         _write_json_atomic(
             args.report,
