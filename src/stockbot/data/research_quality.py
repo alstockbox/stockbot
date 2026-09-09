@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+import hashlib
+import json
 
 import numpy as np
 import pandas as pd
@@ -53,6 +55,23 @@ class ResearchDataQualityReport:
     attestation: ResearchDataAttestation
     research_grade_eligible: bool
     reasons: tuple[str, ...]
+
+
+def research_data_quality_payload(report: ResearchDataQualityReport) -> dict[str, object]:
+    """Return the canonical JSON-safe evidence payload for persistence and identity."""
+
+    return asdict(report)
+
+
+def research_data_quality_fingerprint(report: ResearchDataQualityReport) -> str:
+    """Fingerprint the exact observable checks and explicit attestations used for grade."""
+
+    raw = json.dumps(
+        research_data_quality_payload(report),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
 
 
 def evaluate_research_data_quality(
@@ -126,8 +145,6 @@ def evaluate_research_data_quality(
         if cfg.require_delisted_securities and not universe_report.includes_delisted_securities:
             reasons.append("delisted_securities_not_included")
 
-    # Preserve deterministic ordering while avoiding duplicate reasons also emitted by
-    # the nested universe report.
     deduped = tuple(dict.fromkeys(reasons))
     return ResearchDataQualityReport(
         canonical_schema_valid=True,
