@@ -93,7 +93,7 @@ def test_paper_cli_steps_verified_snapshot_through_frozen_runner(tmp_path, monke
     assert "broker_execution=disabled" in output
 
 
-def test_paper_status_requires_frozen_provenance(monkeypatch, tmp_path, capsys):
+def test_paper_status_requires_verified_frozen_provenance(monkeypatch, tmp_path, capsys):
     captured = {}
     records = [SimpleNamespace(strategy_id="strategy-status")]
 
@@ -117,20 +117,42 @@ def test_paper_status_requires_frozen_provenance(monkeypatch, tmp_path, capsys):
             average_fill_rate=1.0,
             evidence_score=0.0,
             live_eligible=False,
-            frozen_provenance_complete=False,
-            model_artifact_id=None,
-            research_cycle_id=None,
-            reasons=("paper_frozen_provenance",),
+            frozen_provenance_complete=True,
+            model_artifact_id="artifact-status",
+            research_cycle_id="cycle-status",
+            reasons=("insufficient_paper_calendar_span",),
+        )
+
+    def fake_verify(rows, *, artifact_dir, snapshot_root):
+        captured["verified_rows"] = rows
+        captured["artifact_dir"] = artifact_dir
+        captured["snapshot_root"] = snapshot_root
+        return SimpleNamespace(
+            verified=True,
+            snapshots_verified=2,
+            model_artifact_id="artifact-status",
+            research_cycle_id="cycle-status",
+            broker_execution_available=False,
         )
 
     monkeypatch.setattr(paper_cli, "PaperTradingLedger", FakeLedger)
     monkeypatch.setattr(paper_cli, "evaluate_paper_track", fake_evaluate)
+    monkeypatch.setattr(
+        paper_cli,
+        "verify_frozen_paper_provenance",
+        fake_verify,
+        raising=False,
+    )
 
+    artifact_dir = tmp_path / "artifact"
+    snapshot_root = tmp_path / "snapshots"
     args = build_parser().parse_args(
         [
             "--ledger", str(tmp_path / "paper.jsonl"),
             "status",
             "--strategy-id", "strategy-status",
+            "--artifact", str(artifact_dir),
+            "--snapshot-root", str(snapshot_root),
             "--min-sessions", "1",
             "--min-span-days", "1",
         ]
@@ -138,6 +160,11 @@ def test_paper_status_requires_frozen_provenance(monkeypatch, tmp_path, capsys):
 
     assert run_from_args(args) == 0
     assert captured["criteria"].require_frozen_provenance is True
+    assert captured["verified_rows"] is records
+    assert captured["artifact_dir"] == str(artifact_dir)
+    assert captured["snapshot_root"] == str(snapshot_root)
     output = capsys.readouterr().out
-    assert "frozen_provenance_complete=no" in output
+    assert "frozen_provenance_complete=yes" in output
+    assert "external_provenance_verified=yes" in output
+    assert "verified_snapshots=2" in output
     assert "live_evidence_eligible=no" in output
