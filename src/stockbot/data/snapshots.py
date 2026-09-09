@@ -242,6 +242,8 @@ class SnapshotStore:
         manifest = _manifest_from_dict(json.loads(manifest_path.read_text(encoding="utf-8")))
         if manifest.snapshot_id != snapshot_id:
             raise ValueError("snapshot manifest ID does not match directory")
+        if manifest.schema_version != SCHEMA_VERSION:
+            raise ValueError("snapshot schema version mismatch")
         if manifest.created_at.tzinfo is None:
             raise ValueError("snapshot identity requires timezone-aware created_at")
         provider_slug = re.sub(r"[^a-z0-9-]+", "-", manifest.provider.lower()).strip("-") or "provider"
