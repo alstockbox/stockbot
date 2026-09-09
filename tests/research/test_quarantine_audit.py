@@ -1,7 +1,9 @@
+import json
 from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from stockbot.research.holdout import HoldoutConfig
 from stockbot.research.quarantine import QuarantineConfig
@@ -42,14 +44,16 @@ def _candidate(experiment_id: str, alpha: float):
     )
 
 
-def test_quarantine_audit_allows_only_one_frozen_strategy_per_cycle(tmp_path):
-    bars = _bars()
-    quarantine = QuarantineConfig(
+def _quarantine() -> QuarantineConfig:
+    return QuarantineConfig(
         start="2025-03-03",
         min_development_periods=250,
         min_quarantine_periods=40,
     )
-    relaxed = HoldoutConfig(
+
+
+def _relaxed_holdout() -> HoldoutConfig:
+    return HoldoutConfig(
         fraction=0.15,
         min_holdout_periods=40,
         min_research_periods=126,
@@ -58,6 +62,12 @@ def test_quarantine_audit_allows_only_one_frozen_strategy_per_cycle(tmp_path):
         min_stress_score=0.0,
         min_score=-1_000_000.0,
     )
+
+
+def test_quarantine_audit_allows_only_one_frozen_strategy_per_cycle(tmp_path):
+    bars = _bars()
+    quarantine = _quarantine()
+    relaxed = _relaxed_holdout()
     first_spec = freeze_strategy_spec(_candidate("candidate-a", 1.0), top_fraction=0.25, weighting="equal")
     ledger = tmp_path / "audit-ledger.json"
 
@@ -98,3 +108,30 @@ def test_quarantine_audit_allows_only_one_frozen_strategy_per_cycle(tmp_path):
         assert "another strategy" in str(exc)
     else:
         raise AssertionError("expected second strategy audit to fail")
+
+
+def test_quarantine_audit_rejects_tampered_persisted_result(tmp_path):
+    bars = _bars()
+    quarantine = _quarantine()
+    spec = freeze_strategy_spec(_candidate("candidate-a", 1.0), top_fraction=0.25, weighting="equal")
+    ledger = tmp_path / "audit-ledger.json"
+
+    run_single_quarantine_audit(
+        bars,
+        quarantine,
+        spec,
+        ledger_path=ledger,
+        holdout_config=_relaxed_holdout(),
+    )
+    payload = json.loads(ledger.read_text(encoding="utf-8"))
+    payload[0]["passed"] = not bool(payload[0]["passed"])
+    ledger.write_text(json.dumps(payload, sort_keys=True, indent=2), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="audit integrity"):
+        run_single_quarantine_audit(
+            bars,
+            quarantine,
+            spec,
+            ledger_path=ledger,
+            holdout_config=_relaxed_holdout(),
+        )
