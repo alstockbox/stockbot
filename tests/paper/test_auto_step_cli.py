@@ -59,6 +59,7 @@ def _result():
         pending_signal_timestamp="2026-01-08T00:00:00+00:00",
         target_weights={"AAA": 0.5, "BBB": 0.5},
         observation=None,
+        idempotent_replay=False,
         broker_execution_available=False,
     )
 
