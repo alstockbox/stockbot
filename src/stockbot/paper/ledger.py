@@ -12,7 +12,9 @@ from typing import Any
 from stockbot.paper.locking import exclusive_paper_ledger_write_lock, paper_ledger_write_lock_path
 
 
-_LEDGER_SCHEMA_VERSION = 1
+_LEDGER_SCHEMA_VERSION = 2
+_LEDGER_LEGACY_SCHEMA_VERSION = 1
+_LEDGER_SUPPORTED_SCHEMA_VERSIONS = {_LEDGER_LEGACY_SCHEMA_VERSION, _LEDGER_SCHEMA_VERSION}
 _LEDGER_SCHEMA_KEY = "__ledger_schema_version"
 _LEDGER_PREVIOUS_HASH_KEY = "__ledger_previous_hash"
 _LEDGER_RECORD_HASH_KEY = "__ledger_record_hash"
@@ -22,6 +24,7 @@ _LEDGER_METADATA_KEYS = {
     _LEDGER_RECORD_HASH_KEY,
 }
 _LEDGER_GENESIS_HASH = hashlib.sha256(b"stockbot-paper-ledger-v1").hexdigest()
+_HEAD_SCHEMA_VERSION = 1
 
 
 def _parse_aware_timestamp(value: str, *, name: str) -> datetime:
@@ -118,24 +121,97 @@ def _split_ledger_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], dict
 class PaperTradingLedger:
     """Append-only, hash-chained JSONL ledger for forward paper observations.
 
-    Legacy unchained rows remain readable as a prefix for backward compatibility. The
-    first newly appended chained row binds that entire legacy prefix into the chain, so
-    later edits, deletions or reordering of historical rows fail closed on verification.
-    Verify + chronology check + duplicate-check + append is serialized by a per-ledger
-    OS writer lock. Each strategy's realization timestamps must advance strictly forward.
+    Legacy unchained rows and v1 chained rows remain readable for backward compatibility.
+    New v2 rows require an atomically replaced head checkpoint that binds the committed
+    tail hash, logical row count and ledger byte size. This closes the ordinary hash-chain
+    tail-truncation gap: removing the latest committed row(s), deleting the checkpoint, or
+    appending data without committing a matching checkpoint fails closed on verification.
+
+    Verify + chronology check + duplicate-check + append + checkpoint commit is serialized
+    by a per-ledger OS writer lock. Each strategy's realization timestamps must advance
+    strictly forward.
     """
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
+    @property
+    def head_path(self) -> Path:
+        return Path(str(self.path) + ".head.json")
+
+    def _verify_head_checkpoint(
+        self,
+        *,
+        tail_hash: str,
+        row_count: int,
+        checkpoint_required: bool,
+    ) -> None:
+        if not self.head_path.exists():
+            if checkpoint_required:
+                raise ValueError("paper ledger checkpoint is missing for schema-v2 evidence")
+            return
+        if not self.head_path.is_file():
+            raise ValueError("paper ledger checkpoint is not a regular file")
+        try:
+            payload = json.loads(self.head_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError("paper ledger checkpoint integrity violation: invalid JSON") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("paper ledger checkpoint integrity violation: checkpoint must be an object")
+        try:
+            schema_version = int(payload["schema_version"])
+            checkpoint_rows = int(payload["row_count"])
+            checkpoint_size = int(payload["ledger_size_bytes"])
+            checkpoint_tail = str(payload["tail_hash"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("paper ledger checkpoint integrity violation: invalid fields") from exc
+        if schema_version != _HEAD_SCHEMA_VERSION:
+            raise ValueError("paper ledger checkpoint integrity violation: unsupported schema")
+        if checkpoint_rows != int(row_count):
+            raise ValueError("paper ledger checkpoint integrity violation: row count mismatch")
+        if checkpoint_tail != str(tail_hash):
+            raise ValueError("paper ledger checkpoint integrity violation: tail hash mismatch")
+        try:
+            current_size = self.path.stat().st_size
+        except OSError as exc:
+            raise ValueError("paper ledger checkpoint integrity violation: ledger stat failed") from exc
+        if checkpoint_size != current_size:
+            raise ValueError("paper ledger checkpoint integrity violation: ledger size mismatch")
+
+    def _write_head_checkpoint(self, *, tail_hash: str, row_count: int) -> None:
+        payload = {
+            "schema_version": _HEAD_SCHEMA_VERSION,
+            "row_count": int(row_count),
+            "tail_hash": str(tail_hash),
+            "ledger_size_bytes": int(self.path.stat().st_size),
+        }
+        serialized = json.dumps(payload, sort_keys=True, indent=2) + "\n"
+        temporary = Path(str(self.head_path) + ".tmp")
+        try:
+            with temporary.open("w", encoding="utf-8") as handle:
+                handle.write(serialized)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, self.head_path)
+            directory_fd = os.open(str(self.head_path.parent), os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        finally:
+            temporary.unlink(missing_ok=True)
+
     def _read_verified(self) -> tuple[list[PaperObservation], str]:
         if not self.path.exists():
+            if self.head_path.exists():
+                raise ValueError("paper ledger checkpoint exists without ledger")
             return [], _LEDGER_GENESIS_HASH
 
         rows: list[PaperObservation] = []
         tail_hash = _LEDGER_GENESIS_HASH
         chain_started = False
+        checkpoint_required = False
         for line_number, line in enumerate(self.path.read_text(encoding="utf-8").splitlines(), start=1):
             if not line.strip():
                 continue
@@ -172,7 +248,7 @@ class PaperTradingLedger:
                     raise ValueError(
                         f"paper ledger integrity violation at line {line_number}: invalid chain schema"
                     ) from exc
-                if schema_version != _LEDGER_SCHEMA_VERSION:
+                if schema_version not in _LEDGER_SUPPORTED_SCHEMA_VERSIONS:
                     raise ValueError(
                         f"paper ledger integrity violation at line {line_number}: unsupported chain schema"
                     )
@@ -186,7 +262,15 @@ class PaperTradingLedger:
                     )
                 tail_hash = expected_hash
                 chain_started = True
+                if schema_version >= _LEDGER_SCHEMA_VERSION:
+                    checkpoint_required = True
             rows.append(observation)
+
+        self._verify_head_checkpoint(
+            tail_hash=tail_hash,
+            row_count=len(rows),
+            checkpoint_required=checkpoint_required,
+        )
         return rows, tail_hash
 
     def append(self, observation: PaperObservation) -> None:
@@ -220,6 +304,11 @@ class PaperTradingLedger:
                 handle.write(serialized)
                 handle.flush()
                 os.fsync(handle.fileno())
+
+            self._write_head_checkpoint(
+                tail_hash=record_hash,
+                row_count=len(existing) + 1,
+            )
 
     def records(self, *, strategy_id: str | None = None) -> list[PaperObservation]:
         rows, _ = self._read_verified()
