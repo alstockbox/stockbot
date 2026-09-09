@@ -115,6 +115,7 @@ def test_freeze_and_two_shadow_steps_create_forward_observation_with_provenance(
         data_age_seconds=0.0,
     )
     assert first.observation is None
+    assert first.idempotent_replay is False
     assert first.pending_signal_timestamp == pd.Timestamp(freeze_dates[-1]).isoformat()
     assert not first.broker_execution_available
     assert PaperTradingLedger(ledger_path).records(strategy_id="strategy-shadow") == []
@@ -128,6 +129,7 @@ def test_freeze_and_two_shadow_steps_create_forward_observation_with_provenance(
         data_age_seconds=0.0,
     )
     assert second.observation is not None
+    assert second.idempotent_replay is False
     observation = second.observation
     assert observation.strategy_id == "strategy-shadow"
     assert observation.research_cycle_id == "cycle-paper-forward"
@@ -160,6 +162,8 @@ def test_shadow_step_same_snapshot_is_idempotent_noop(tmp_path):
     first = run_shadow_step(freeze_bars, **kwargs)
     replay = run_shadow_step(freeze_bars, **kwargs)
 
+    assert first.idempotent_replay is False
+    assert replay.idempotent_replay is True
     assert replay.processed_timestamp == first.processed_timestamp
     assert replay.pending_signal_timestamp == first.pending_signal_timestamp
     assert replay.target_weights == first.target_weights
@@ -242,6 +246,7 @@ def test_shadow_step_recovers_if_ledger_was_written_before_state_crash(tmp_path,
     rows_after_recovery = PaperTradingLedger(ledger_path).records(strategy_id="strategy-shadow")
     assert len(rows_after_recovery) == 1
     assert recovered.observation == rows_after_recovery[0]
+    assert recovered.idempotent_replay is False
     assert recovered.processed_timestamp == pd.Timestamp(next_date).isoformat()
 
 
@@ -258,6 +263,6 @@ def test_loading_frozen_shadow_artifact_rejects_model_tampering(tmp_path):
     try:
         load_frozen_shadow_artifact(tmp_path / "artifact")
     except ValueError as exc:
-        assert "model hash" in str(exc)
+        assert "model hash" in str(exc).lower()
     else:
         raise AssertionError("tampered frozen model bytes must fail closed")
