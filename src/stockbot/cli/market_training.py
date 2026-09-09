@@ -18,6 +18,7 @@ from stockbot.data.research_quality import (
     ResearchDataAttestation,
     evaluate_research_data_quality,
     research_data_quality_fingerprint,
+    research_data_quality_payload,
     verified_data_grade,
 )
 from stockbot.data.snapshots import SnapshotStore
@@ -276,6 +277,12 @@ def run_from_args(args: argparse.Namespace) -> int:
             if missing_auxiliary:
                 raise ValueError(f"unknown requested auxiliary features: {missing_auxiliary}")
 
+        quality_report, quality_fingerprint, effective_grade = _evaluate_factory_data_quality(
+            snapshot,
+            point_in_time_universe,
+            args,
+        )
+
         quarantine_config = None
         quarantine_manifest_path = None
         if args.factory_quarantine_start:
@@ -313,11 +320,17 @@ def run_from_args(args: argparse.Namespace) -> int:
             universe_fingerprint=(
                 None if point_in_time_universe is None else point_in_time_universe.fingerprint
             ),
+            quality_fingerprint=quality_fingerprint,
         )
         run_dir = None
         if args.factory_run_dir:
             run_dir = Path(args.factory_run_dir) / job_manifest.job_id
             write_json_record(run_dir / "job.json", job_manifest)
+            quality_payload = research_data_quality_payload(quality_report)
+            quality_payload["quality_fingerprint"] = quality_fingerprint
+            quality_payload["declared_grade"] = manifest.grade.value
+            quality_payload["effective_grade"] = effective_grade.value
+            write_json_payload(run_dir / "data_quality.json", quality_payload)
 
         report = run_snapshot_factory(
             snapshot,
@@ -325,6 +338,7 @@ def run_from_args(args: argparse.Namespace) -> int:
             memory_path=args.factory_memory,
             quarantine_config=quarantine_config,
             quarantine_manifest_path=quarantine_manifest_path,
+            quality_report=quality_report,
             auxiliary_store=auxiliary_store,
             auxiliary_feature_names=auxiliary_feature_names,
             auxiliary_max_age_days=args.factory_auxiliary_max_age_days,
@@ -339,6 +353,7 @@ def run_from_args(args: argparse.Namespace) -> int:
                 top_k_per_horizon=args.factory_specialists_top_k,
                 quarantine_config=quarantine_config,
                 quarantine_manifest_path=quarantine_manifest_path,
+                quality_report=quality_report,
                 auxiliary_store=auxiliary_store,
                 auxiliary_feature_names=auxiliary_feature_names,
                 auxiliary_max_age_days=args.factory_auxiliary_max_age_days,
@@ -365,6 +380,7 @@ def run_from_args(args: argparse.Namespace) -> int:
                 capacity_levels=capital_levels,
                 quarantine_config=quarantine_config,
                 quarantine_manifest_path=quarantine_manifest_path,
+                quality_report=quality_report,
                 point_in_time_universe=point_in_time_universe,
                 auxiliary_store=auxiliary_store,
                 auxiliary_feature_names=auxiliary_feature_names,
@@ -389,6 +405,14 @@ def run_from_args(args: argparse.Namespace) -> int:
         print(f"  promotion_candidates={report.candidates_passed}")
         print(f"  holdout_evaluated={report.holdout_evaluated}")
         print(f"  holdout_start={report.holdout_start}")
+        print(f"  data_quality_fingerprint={quality_fingerprint}")
+        print(
+            "  data_quality_research_grade_eligible="
+            f"{str(quality_report.research_grade_eligible).lower()}"
+        )
+        print(f"  declared_grade={manifest.grade.value}")
+        print(f"  effective_grade={effective_grade.value}")
+        print("  data_quality_reasons=" + (",".join(quality_report.reasons) or "none"))
         if auxiliary_store is not None:
             print(f"  auxiliary_fingerprint={auxiliary_store.fingerprint}")
             print("  auxiliary_features=" + ",".join(selected_auxiliary_names))
