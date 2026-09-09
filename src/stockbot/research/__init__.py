@@ -40,6 +40,8 @@ from stockbot.research.readiness import PaperReadinessReport, evaluate_paper_rea
 from stockbot.research.regime_eval import RegimePerformanceReport, build_market_regime_series, evaluate_regime_performance
 from stockbot.research.regime_router import RegimeRouterReport, build_regime_router
 from stockbot.research.regime_specialists import RegimeSpecialistResult, run_regime_specialist, select_best_regime_specialists
+from stockbot.research.sector_allocator import SectorCapAllocationReport, apply_point_in_time_sector_cap, evaluate_sector_cap_challenger
+from stockbot.research.sector_exposure import SectorPortfolioExposureReport, evaluate_sector_portfolio_exposure
 from stockbot.research.specialist_pipeline import RegimeSpecialistDiagnostics, run_regime_specialist_diagnostics, select_specialist_candidate_pairs
 from stockbot.research.stacking import StackingReport, evaluate_oos_stacking
 from stockbot.research.stress import StressReport, StressScenario, default_stress_suite, evaluate_stress_suite
@@ -92,11 +94,14 @@ __all__ = [
     "ResearchGateCriteria",
     "ResearchJobManifest",
     "ResearchRunSummary",
+    "SectorCapAllocationReport",
+    "SectorPortfolioExposureReport",
     "StackingReport",
     "StressReport",
     "StressScenario",
     "WindowResult",
     "WindowRobustnessReport",
+    "apply_point_in_time_sector_cap",
     "assert_same_quarantine_boundary",
     "benjamini_hochberg",
     "build_horizon_ensemble",
@@ -118,7 +123,9 @@ __all__ = [
     "evaluate_regime_performance",
     "evaluate_research_gate",
     "evaluate_return_drift",
+    "evaluate_sector_cap_challenger",
     "evaluate_sector_factor_neutralization",
+    "evaluate_sector_portfolio_exposure",
     "evaluate_stress_suite",
     "evaluate_training_window_robustness",
     "freeze_strategy_spec",
