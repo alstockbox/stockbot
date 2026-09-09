@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pandas as pd
 
+import stockbot.paper.runner as shadow_runner
 from stockbot.paper.ledger import PaperTradingLedger
 from stockbot.paper.runner import (
     freeze_shadow_strategy,
@@ -143,7 +144,7 @@ def test_freeze_and_two_shadow_steps_create_forward_observation_with_provenance(
     assert records == [observation]
 
 
-def test_shadow_step_rejects_replaying_same_market_timestamp(tmp_path):
+def test_shadow_step_same_snapshot_is_idempotent_noop(tmp_path):
     all_bars = _bars()
     freeze_dates = sorted(all_bars["timestamp"].unique())[:75]
     freeze_bars = all_bars[all_bars["timestamp"].isin(freeze_dates)].copy()
@@ -156,14 +157,92 @@ def test_shadow_step_rejects_replaying_same_market_timestamp(tmp_path):
         snapshot_fingerprint="paper-snapshot-001",
         data_age_seconds=0.0,
     )
-    run_shadow_step(freeze_bars, **kwargs)
+    first = run_shadow_step(freeze_bars, **kwargs)
+    replay = run_shadow_step(freeze_bars, **kwargs)
+
+    assert replay.processed_timestamp == first.processed_timestamp
+    assert replay.pending_signal_timestamp == first.pending_signal_timestamp
+    assert replay.target_weights == first.target_weights
+    assert replay.observation is None
+    assert PaperTradingLedger(kwargs["ledger_path"]).records(strategy_id="strategy-shadow") == []
+
+
+def test_shadow_step_rejects_same_timestamp_from_different_snapshot(tmp_path):
+    all_bars = _bars()
+    freeze_dates = sorted(all_bars["timestamp"].unique())[:75]
+    freeze_bars = all_bars[all_bars["timestamp"].isin(freeze_dates)].copy()
+    _freeze(tmp_path, freeze_bars)
+
+    base_kwargs = dict(
+        artifact_dir=tmp_path / "artifact",
+        state_path=tmp_path / "paper" / "state.json",
+        ledger_path=tmp_path / "paper" / "observations.jsonl",
+        data_age_seconds=0.0,
+    )
+    run_shadow_step(freeze_bars, snapshot_fingerprint="paper-snapshot-001", **base_kwargs)
 
     try:
-        run_shadow_step(freeze_bars, **kwargs)
+        run_shadow_step(freeze_bars, snapshot_fingerprint="paper-snapshot-rewritten", **base_kwargs)
     except ValueError as exc:
-        assert "new market timestamp" in str(exc)
+        assert "snapshot" in str(exc).lower()
     else:
-        raise AssertionError("replaying the same market timestamp must fail closed")
+        raise AssertionError("same market timestamp from a different snapshot must fail closed")
+
+
+def test_shadow_step_recovers_if_ledger_was_written_before_state_crash(tmp_path, monkeypatch):
+    all_bars = _bars()
+    freeze_dates = sorted(all_bars["timestamp"].unique())[:75]
+    freeze_bars = all_bars[all_bars["timestamp"].isin(freeze_dates)].copy()
+    next_date = sorted(all_bars["timestamp"].unique())[75]
+    next_bars = all_bars[all_bars["timestamp"] <= next_date].copy()
+    _freeze(tmp_path, freeze_bars)
+
+    state_path = tmp_path / "paper" / "state.json"
+    ledger_path = tmp_path / "paper" / "observations.jsonl"
+    run_shadow_step(
+        freeze_bars,
+        artifact_dir=tmp_path / "artifact",
+        state_path=state_path,
+        ledger_path=ledger_path,
+        snapshot_fingerprint="paper-snapshot-001",
+    )
+
+    original_save_state = shadow_runner._save_state
+
+    def crash_after_ledger_write(path, state):
+        raise RuntimeError("simulated crash before state commit")
+
+    monkeypatch.setattr(shadow_runner, "_save_state", crash_after_ledger_write)
+    try:
+        run_shadow_step(
+            next_bars,
+            artifact_dir=tmp_path / "artifact",
+            state_path=state_path,
+            ledger_path=ledger_path,
+            snapshot_fingerprint="paper-snapshot-002",
+        )
+    except RuntimeError as exc:
+        assert "simulated crash" in str(exc)
+    else:
+        raise AssertionError("simulated state-write crash must propagate")
+
+    rows_after_crash = PaperTradingLedger(ledger_path).records(strategy_id="strategy-shadow")
+    assert len(rows_after_crash) == 1
+    assert rows_after_crash[0].timestamp == pd.Timestamp(next_date).isoformat()
+
+    monkeypatch.setattr(shadow_runner, "_save_state", original_save_state)
+    recovered = run_shadow_step(
+        next_bars,
+        artifact_dir=tmp_path / "artifact",
+        state_path=state_path,
+        ledger_path=ledger_path,
+        snapshot_fingerprint="paper-snapshot-002",
+    )
+
+    rows_after_recovery = PaperTradingLedger(ledger_path).records(strategy_id="strategy-shadow")
+    assert len(rows_after_recovery) == 1
+    assert recovered.observation == rows_after_recovery[0]
+    assert recovered.processed_timestamp == pd.Timestamp(next_date).isoformat()
 
 
 def test_loading_frozen_shadow_artifact_rejects_model_tampering(tmp_path):
