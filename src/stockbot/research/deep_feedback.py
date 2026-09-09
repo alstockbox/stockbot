@@ -37,6 +37,26 @@ class DeepResearchFinding:
     stacking_delta_vs_policy: float | None
 
 
+@dataclass(frozen=True)
+class ResearchCycleManifest:
+    """Auditable research-cycle identity plus non-identity feedback settings.
+
+    The five evidence fields define `research_cycle_id`. Operational values such as the
+    memory path and feedback weight are recorded for reproducibility but deliberately do
+    not participate in cycle identity.
+    """
+
+    schema_version: int
+    research_cycle_id: str
+    dataset_fingerprint: str
+    quarantine_start: str | None
+    universe_fingerprint: str | None
+    auxiliary_fingerprint: str | None
+    quality_fingerprint: str | None
+    deep_feedback_path: str
+    deep_feedback_weight: float
+
+
 def _bounded(value: Any, default: float = 0.0) -> float:
     try:
         number = float(value)
@@ -94,6 +114,49 @@ def build_research_cycle_id(
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:24]
+
+
+def make_research_cycle_manifest(
+    *,
+    dataset_fingerprint: str,
+    deep_feedback_path: str | Path,
+    deep_feedback_weight: float,
+    quarantine_start: str | None = None,
+    universe_fingerprint: str | None = None,
+    auxiliary_fingerprint: str | None = None,
+    quality_fingerprint: str | None = None,
+) -> ResearchCycleManifest:
+    """Build a deterministic, machine-readable research-cycle audit record."""
+
+    path_text = str(deep_feedback_path).strip()
+    if not path_text:
+        raise ValueError("deep_feedback_path is required")
+    try:
+        weight = float(deep_feedback_weight)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("deep feedback weight must be in [0,1]") from exc
+    if not math.isfinite(weight) or not 0.0 <= weight <= 1.0:
+        raise ValueError("deep feedback weight must be in [0,1]")
+
+    dataset = str(dataset_fingerprint).strip()
+    cycle_id = build_research_cycle_id(
+        dataset_fingerprint=dataset,
+        quarantine_start=quarantine_start,
+        universe_fingerprint=universe_fingerprint,
+        auxiliary_fingerprint=auxiliary_fingerprint,
+        quality_fingerprint=quality_fingerprint,
+    )
+    return ResearchCycleManifest(
+        schema_version=1,
+        research_cycle_id=cycle_id,
+        dataset_fingerprint=dataset,
+        quarantine_start=None if quarantine_start is None else str(quarantine_start),
+        universe_fingerprint=None if universe_fingerprint is None else str(universe_fingerprint),
+        auxiliary_fingerprint=None if auxiliary_fingerprint is None else str(auxiliary_fingerprint),
+        quality_fingerprint=None if quality_fingerprint is None else str(quality_fingerprint),
+        deep_feedback_path=path_text,
+        deep_feedback_weight=weight,
+    )
 
 
 def _finding_id(source_cycle_id: str, experiment_id: str) -> str:
