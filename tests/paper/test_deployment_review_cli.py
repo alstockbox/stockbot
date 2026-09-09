@@ -1,6 +1,8 @@
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from stockbot.cli import paper_arena as paper_cli
 from stockbot.data.schemas import DataGrade
 
@@ -147,3 +149,34 @@ def test_deployment_review_cli_assembles_verified_evidence(tmp_path, monkeypatch
     output = capsys.readouterr().out
     assert "eligible_for_manual_live_review=yes" in output
     assert "broker_execution=disabled" in output
+
+
+def test_deployment_review_cli_persists_fail_closed_error_report(tmp_path, monkeypatch):
+    report_path = tmp_path / "deployment-review.json"
+
+    def fail_review(args):
+        raise ValueError("research cycle identity mismatch")
+
+    monkeypatch.setattr(paper_cli, "run_from_args", fail_review)
+
+    with pytest.raises(SystemExit) as exc_info:
+        paper_cli.main(
+            [
+                "--ledger", str(tmp_path / "paper.jsonl"),
+                "deployment-review",
+                "--artifact", str(tmp_path / "artifact"),
+                "--snapshot-root", str(tmp_path / "snapshots"),
+                "--research-run", str(tmp_path / "run"),
+                "--audit-ledger", str(tmp_path / "audit.json"),
+                "--report", str(report_path),
+            ]
+        )
+
+    assert exc_info.value.code == 2
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 1
+    assert payload["status"] == "error"
+    assert payload["error_type"] == "ValueError"
+    assert payload["error"] == "research cycle identity mismatch"
+    assert payload["eligible_for_manual_live_review"] is False
+    assert payload["broker_execution_available"] is False
