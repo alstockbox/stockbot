@@ -49,6 +49,7 @@ class FrozenShadowArtifactManifest:
     risk_config: dict[str, Any]
     auxiliary_fingerprint: str | None
     frozen_at: str
+    research_readiness_fingerprint: str | None = None
     broker_execution_available: bool = False
     schema_version: int = 1
 
@@ -130,6 +131,7 @@ def freeze_shadow_strategy(
     research_cycle_id: str,
     source_dataset_fingerprint: str,
     output_dir: str | Path,
+    research_readiness_fingerprint: str | None = None,
     execution_config: LiquidityExecutionConfig | None = None,
     risk_config: RiskConfig | None = None,
     auxiliary_store: PointInTimeFeatureStore | None = None,
@@ -145,11 +147,18 @@ def freeze_shadow_strategy(
 
     cycle_id = str(research_cycle_id).strip()
     dataset_id = str(source_dataset_fingerprint).strip()
+    readiness_id = (
+        None
+        if research_readiness_fingerprint is None
+        else str(research_readiness_fingerprint).strip()
+    )
     selected_features = tuple(str(value).strip() for value in feature_names if str(value).strip())
     if not cycle_id:
         raise ValueError("research_cycle_id is required")
     if not dataset_id:
         raise ValueError("source_dataset_fingerprint is required")
+    if research_readiness_fingerprint is not None and not readiness_id:
+        raise ValueError("research_readiness_fingerprint cannot be empty")
     if not selected_features or len(set(selected_features)) != len(selected_features):
         raise ValueError("feature_names must contain unique features")
 
@@ -212,6 +221,7 @@ def freeze_shadow_strategy(
         "risk_config": asdict(risk),
         "auxiliary_fingerprint": auxiliary_fingerprint,
         "frozen_at": datetime.now(timezone.utc).isoformat(),
+        "research_readiness_fingerprint": readiness_id,
         "broker_execution_available": False,
         "schema_version": 1,
     }
