@@ -279,3 +279,100 @@ def evaluate_deployment_evidence(
         eligible_for_manual_live_review=eligible,
         reasons=tuple(reasons),
     )
+
+
+def _required_lineage_value(source: object, attribute: str, label: str) -> str:
+    value = str(getattr(source, attribute, "") or "").strip()
+    if not value:
+        raise ValueError(f"deployment review requires {label}")
+    return value
+
+
+def evaluate_bound_deployment_review(
+    *,
+    research_evidence: VerifiedResearchEvidence,
+    artifact_manifest: object,
+    quarantine_audit_record: QuarantineAuditRecord,
+    paper_report: PaperArenaReport,
+    paper_provenance_report: object,
+) -> DeploymentEvidenceReport:
+    """Bind every independent evidence layer to one frozen artifact before review.
+
+    The result can only express eligibility for a later manual live review. It cannot
+    authorize broker execution.
+    """
+
+    if bool(getattr(artifact_manifest, "broker_execution_available", False)):
+        raise ValueError("frozen artifact may not enable broker execution")
+    if bool(getattr(paper_provenance_report, "broker_execution_available", False)):
+        raise ValueError("paper provenance may not enable broker execution")
+
+    artifact_strategy = _required_lineage_value(artifact_manifest, "strategy_id", "artifact strategy")
+    artifact_id = _required_lineage_value(artifact_manifest, "artifact_id", "artifact ID")
+    artifact_experiment = _required_lineage_value(artifact_manifest, "experiment_id", "artifact experiment")
+    artifact_cycle = _required_lineage_value(artifact_manifest, "research_cycle_id", "artifact research cycle")
+    artifact_dataset = _required_lineage_value(
+        artifact_manifest,
+        "source_dataset_fingerprint",
+        "artifact source dataset",
+    )
+
+    if research_evidence.experiment_id != artifact_experiment:
+        raise ValueError("research experiment does not match frozen artifact experiment")
+    if research_evidence.research_cycle_id != artifact_cycle:
+        raise ValueError("research cycle does not match frozen artifact cycle")
+    if research_evidence.dataset_fingerprint != artifact_dataset:
+        raise ValueError("research dataset does not match frozen artifact dataset")
+    if research_evidence.quarantine_start is None:
+        raise ValueError("deployment review requires sealed research quarantine boundary")
+
+    audit_strategy = _required_lineage_value(quarantine_audit_record, "strategy_id", "audit strategy")
+    audit_experiment = _required_lineage_value(quarantine_audit_record, "experiment_id", "audit experiment")
+    audit_start = _required_lineage_value(quarantine_audit_record, "quarantine_start", "audit quarantine boundary")
+    if audit_strategy != artifact_strategy:
+        raise ValueError("audit strategy does not match frozen artifact strategy")
+    if audit_experiment != artifact_experiment:
+        raise ValueError("audit experiment does not match frozen artifact experiment")
+    if audit_start != research_evidence.quarantine_start:
+        raise ValueError("audit quarantine boundary does not match research quarantine boundary")
+
+    paper_strategy = _required_lineage_value(paper_report, "strategy_id", "paper strategy")
+    paper_artifact = _required_lineage_value(paper_report, "model_artifact_id", "paper artifact")
+    paper_cycle = _required_lineage_value(paper_report, "research_cycle_id", "paper research cycle")
+    if paper_strategy != artifact_strategy:
+        raise ValueError("paper strategy does not match frozen artifact strategy")
+    if paper_artifact != artifact_id:
+        raise ValueError("paper artifact does not match frozen artifact")
+    if paper_cycle != artifact_cycle:
+        raise ValueError("paper research cycle does not match frozen artifact cycle")
+
+    provenance_strategy = _required_lineage_value(
+        paper_provenance_report,
+        "strategy_id",
+        "provenance strategy",
+    )
+    provenance_artifact = _required_lineage_value(
+        paper_provenance_report,
+        "model_artifact_id",
+        "provenance artifact",
+    )
+    provenance_cycle = _required_lineage_value(
+        paper_provenance_report,
+        "research_cycle_id",
+        "provenance research cycle",
+    )
+    if provenance_strategy != artifact_strategy:
+        raise ValueError("paper provenance strategy does not match frozen artifact strategy")
+    if provenance_artifact != artifact_id:
+        raise ValueError("paper provenance artifact does not match frozen artifact")
+    if provenance_cycle != artifact_cycle:
+        raise ValueError("paper provenance research cycle does not match frozen artifact cycle")
+
+    return evaluate_deployment_evidence(
+        research_ready=research_evidence.research_ready,
+        data_grade=research_evidence.data_grade,
+        quarantine_audit=None,
+        quarantine_audit_record=quarantine_audit_record,
+        paper_report=paper_report,
+        paper_provenance_report=paper_provenance_report,
+    )
