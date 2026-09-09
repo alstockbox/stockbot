@@ -222,3 +222,37 @@ def test_verified_quarantine_audit_rejects_duplicate_cycle_records(tmp_path):
             quarantine_start=result.manifest.start,
             strategy_id=spec.strategy_id,
         )
+
+
+def test_quarantine_audit_persists_and_verifies_research_cycle(tmp_path):
+    bars = _bars()
+    quarantine = _quarantine()
+    spec = freeze_strategy_spec(_candidate("candidate-a", 1.0), top_fraction=0.25, weighting="equal")
+    ledger = tmp_path / "audit-ledger.json"
+
+    result = run_single_quarantine_audit(
+        bars,
+        quarantine,
+        spec,
+        ledger_path=ledger,
+        holdout_config=_relaxed_holdout(),
+        research_cycle_id="cycle-a",
+    )
+    assert result.record.research_cycle_id == "cycle-a"
+
+    record = quarantine_audit_module.load_verified_quarantine_audit_record(
+        ledger,
+        quarantine_start=result.manifest.start,
+        strategy_id=spec.strategy_id,
+        research_cycle_id="cycle-a",
+    )
+    assert record.audit_id == result.record.audit_id
+    assert record.research_cycle_id == "cycle-a"
+
+    with pytest.raises(ValueError, match="research cycle"):
+        quarantine_audit_module.load_verified_quarantine_audit_record(
+            ledger,
+            quarantine_start=result.manifest.start,
+            strategy_id=spec.strategy_id,
+            research_cycle_id="different-cycle",
+        )
