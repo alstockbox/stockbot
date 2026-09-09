@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -225,6 +226,21 @@ def _evaluate_factory_data_quality(snapshot, point_in_time_universe, args):
     return report, fingerprint, effective_grade
 
 
+def _paper_readiness_fingerprint(readiness) -> str:
+    if readiness is None:
+        raise ValueError("factory champion is missing paper readiness evidence")
+    score = getattr(readiness, "score", None)
+    if score is None:
+        raise ValueError("factory champion paper readiness score is missing")
+    payload = {
+        "ready": bool(getattr(readiness, "ready", False)),
+        "score": float(score),
+        "reasons": [str(value) for value in (getattr(readiness, "reasons", ()) or ())],
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
 def run_from_args(args: argparse.Namespace) -> int:
     provider = resolve_provider(args.provider)
     symbols = _parse_symbols(args.symbols)
@@ -413,6 +429,9 @@ def run_from_args(args: argparse.Namespace) -> int:
                     feature_names=champion.result.artifact.feature_names,
                     research_cycle_id=research_cycle_id,
                     source_dataset_fingerprint=manifest.dataset_fingerprint,
+                    research_readiness_fingerprint=_paper_readiness_fingerprint(
+                        champion.paper_readiness
+                    ),
                     output_dir=Path(args.factory_freeze_shadow_dir),
                     execution_config=shadow_execution,
                     auxiliary_store=auxiliary_store,
