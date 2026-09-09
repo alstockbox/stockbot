@@ -80,6 +80,12 @@ def test_sector_factor_neutralization_reduces_sector_bias_and_keeps_oos_signal()
     assert np.isfinite(report.neutralized_score)
     assert np.isfinite(report.neutralized_metrics["sharpe"])
     assert report.neutralized_predictions.notna().sum() > 0
+    assert report.baseline_sector_exposure.sector_coverage == 1.0
+    assert report.neutralized_sector_exposure.sector_coverage == 1.0
+    assert report.baseline_sector_exposure.active_dates > 0
+    assert report.neutralized_sector_exposure.active_dates > 0
+    assert 0.0 <= report.baseline_sector_exposure.average_max_sector_weight <= 1.0
+    assert 0.0 <= report.neutralized_sector_exposure.average_max_sector_weight <= 1.0
     for name, before in report.factor_correlations_before.items():
         after = report.factor_correlations_after[name]
         assert abs(after) <= abs(before) + 0.10
