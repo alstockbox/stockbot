@@ -109,6 +109,47 @@ def _verify_snapshot(
     return snapshot
 
 
+def _verify_forward_chain_continuity(
+    observations: list[PaperObservation] | tuple[PaperObservation, ...],
+) -> tuple[PaperObservation, ...]:
+    ordered = tuple(
+        sorted(
+            observations,
+            key=lambda row: _utc_timestamp(
+                row.timestamp,
+                label="paper realization timestamp",
+            ),
+        )
+    )
+    for previous, current in zip(ordered, ordered[1:]):
+        previous_realization_time = _utc_timestamp(
+            previous.timestamp,
+            label="paper realization timestamp",
+        )
+        current_signal_time = _utc_timestamp(
+            _required_text(current, "signal_timestamp", "signal timestamp"),
+            label="paper signal timestamp",
+        )
+        previous_realization_fingerprint = _required_text(
+            previous,
+            "realization_snapshot_fingerprint",
+            "realization snapshot fingerprint",
+        )
+        current_signal_fingerprint = _required_text(
+            current,
+            "signal_snapshot_fingerprint",
+            "signal snapshot fingerprint",
+        )
+        if (
+            current_signal_time != previous_realization_time
+            or current_signal_fingerprint != previous_realization_fingerprint
+        ):
+            raise ValueError(
+                "paper forward provenance continuity is broken between consecutive observations"
+            )
+    return ordered
+
+
 def verify_frozen_paper_provenance(
     observations: list[PaperObservation] | tuple[PaperObservation, ...],
     *,
@@ -121,6 +162,11 @@ def verify_frozen_paper_provenance(
     verifier. Every signal and realization fingerprint must resolve to an immutable
     snapshot that passes the normal snapshot fingerprint checks, has the exact frozen
     symbol universe, and ends at the timestamp recorded by the paper observation.
+
+    Consecutive observations must also form one continuous frozen-forward state chain:
+    the previous realization timestamp/fingerprint is exactly the next signal
+    timestamp/fingerprint. This prevents individually valid paper fragments from being
+    stitched together into a synthetic forward track.
 
     Snapshot provenance may be generic (for example an explicitly selected pre-existing
     verified snapshot). When it explicitly names a shadow artifact or research cycle,
@@ -143,6 +189,7 @@ def verify_frozen_paper_provenance(
         attribute="research_cycle_id",
         label="research cycle",
     )
+    ordered = _verify_forward_chain_continuity(observations)
 
     artifact = load_frozen_shadow_artifact(artifact_dir)
     if str(artifact.strategy_id) != strategy_id:
@@ -157,7 +204,7 @@ def verify_frozen_paper_provenance(
 
     store = SnapshotStore(snapshot_root)
     verified_snapshots: dict[str, object] = {}
-    for row in observations:
+    for row in ordered:
         signal_timestamp = _required_text(row, "signal_timestamp", "signal timestamp")
         signal_fingerprint = _required_text(
             row,
