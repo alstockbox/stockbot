@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime
+from datetime import datetime, timezone
+import os
 from pathlib import Path
 
+from stockbot.data.download import DownloadError, download_market_snapshot
+from stockbot.data.providers.http import ProviderError
+from stockbot.data.providers.tiingo import TiingoProvider
+from stockbot.data.providers.yahoo_bootstrap import YahooBootstrapProvider
 from stockbot.data.research_inputs import load_point_in_time_feature_store
 from stockbot.data.snapshots import SnapshotStore
 from stockbot.paper.arena import PaperArenaCriteria, evaluate_paper_track
@@ -65,11 +70,39 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_shadow_step_arguments(auto_step, explicit_snapshot=False)
 
+    cycle = subparsers.add_parser(
+        "cycle",
+        help="Refresh immutable market data for the frozen universe and advance one shadow step",
+    )
+    _add_shadow_step_arguments(cycle, explicit_snapshot=False)
+    cycle.add_argument("--provider", required=True, choices=("yahoo-bootstrap", "tiingo"))
+    cycle.add_argument(
+        "--start",
+        default=None,
+        help="Optional download start date; otherwise inherited from the latest verified compatible snapshot",
+    )
+    cycle.add_argument(
+        "--end",
+        default=None,
+        help="Inclusive download end date; defaults to the current UTC calendar date",
+    )
+
     status = subparsers.add_parser("status", help="Evaluate accumulated forward paper evidence")
     status.add_argument("--strategy-id", required=True)
     status.add_argument("--min-sessions", type=int, default=60)
     status.add_argument("--min-span-days", type=int, default=45)
     return parser
+
+
+def resolve_shadow_provider(name: str):
+    if name == "yahoo-bootstrap":
+        return YahooBootstrapProvider()
+    if name == "tiingo":
+        token = os.environ.get("TIINGO_API_TOKEN", "").strip()
+        if not token:
+            raise ProviderError("TIINGO_API_TOKEN is required for --provider tiingo")
+        return TiingoProvider(token=token)
+    raise ValueError(f"unsupported shadow provider: {name}")
 
 
 def _validate_shadow_args(args: argparse.Namespace):
@@ -166,6 +199,33 @@ def _run_shadow_snapshot(args: argparse.Namespace, snapshot) -> int:
     return 0
 
 
+def _run_shadow_cycle(args: argparse.Namespace) -> int:
+    artifact = load_frozen_shadow_artifact(args.artifact)
+    if args.start is None:
+        baseline = _select_latest_compatible_snapshot(args.snapshot_root, artifact.symbols)
+        start = baseline.manifest.start
+    else:
+        start = args.start
+    end = args.end or datetime.now(timezone.utc).date().isoformat()
+    provider = resolve_shadow_provider(args.provider)
+    store = SnapshotStore(args.snapshot_root)
+    snapshot = download_market_snapshot(
+        provider,
+        artifact.symbols,
+        start,
+        end,
+        store,
+        provenance={
+            "purpose": "frozen_forward_shadow",
+            "shadow_artifact_id": artifact.artifact_id,
+            "research_cycle_id": artifact.research_cycle_id,
+        },
+    )
+    print(f"refreshed_snapshot_id={snapshot.snapshot_id}")
+    print(f"refreshed_snapshot_fingerprint={snapshot.manifest.dataset_fingerprint}")
+    return _run_shadow_snapshot(args, snapshot)
+
+
 def run_from_args(args: argparse.Namespace) -> int:
     ledger = PaperTradingLedger(args.ledger)
     if args.command == "record":
@@ -196,6 +256,9 @@ def run_from_args(args: argparse.Namespace) -> int:
         print(f"selected_snapshot_id={snapshot.snapshot_id}")
         print(f"selected_snapshot_fingerprint={snapshot.manifest.dataset_fingerprint}")
         return _run_shadow_snapshot(args, snapshot)
+
+    if args.command == "cycle":
+        return _run_shadow_cycle(args)
 
     if args.command == "status":
         records = ledger.records(strategy_id=args.strategy_id)
@@ -228,6 +291,6 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     try:
         return run_from_args(args)
-    except ValueError as exc:
+    except (ProviderError, DownloadError, ValueError) as exc:
         parser.error(str(exc))
     return 2
