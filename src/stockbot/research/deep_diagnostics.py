@@ -20,6 +20,7 @@ from stockbot.research.feature_ablation import FeatureAblationReport, evaluate_f
 from stockbot.research.liquidity_execution import LiquidityExecutionConfig, LiquidityExecutionReport, simulate_liquidity_aware_execution
 from stockbot.research.neutralization import NeutralizationReport, evaluate_sector_factor_neutralization
 from stockbot.research.policy_search import PolicyArenaReport, evaluate_policy_arena
+from stockbot.research.sector_allocator import SectorCapAllocationReport, evaluate_sector_cap_challenger
 from stockbot.research.stacking import StackingReport, evaluate_oos_stacking
 from stockbot.research.window_robustness import WindowRobustnessReport, evaluate_training_window_robustness
 
@@ -37,6 +38,7 @@ class CandidateDeepDiagnostics:
     window_robustness: WindowRobustnessReport
     feature_ablation: FeatureAblationReport
     neutralization: NeutralizationReport | None = None
+    sector_cap_challenger: SectorCapAllocationReport | None = None
     auxiliary_ablation: AuxiliaryAblationReport | None = None
 
 
@@ -185,6 +187,7 @@ def run_deep_research_diagnostics(
         replay_feature_names = artifact_feature_names or None
 
         neutralization = None
+        sector_cap_challenger = None
         if point_in_time_universe is not None:
             neutralization = evaluate_sector_factor_neutralization(
                 research_bars,
@@ -192,6 +195,14 @@ def run_deep_research_diagnostics(
                 point_in_time_universe,
                 top_fraction=best_policy.top_fraction,
                 weighting=best_policy.weighting,
+            )
+            sector_cap_challenger = evaluate_sector_cap_challenger(
+                research_bars,
+                candidate.result.predictions,
+                point_in_time_universe,
+                top_fraction=best_policy.top_fraction,
+                weighting=best_policy.weighting,
+                oos_coverage=candidate.oos_coverage,
             )
 
         liquidity = simulate_liquidity_aware_execution(
@@ -265,6 +276,7 @@ def run_deep_research_diagnostics(
             window_robustness=windows,
             feature_ablation=ablation,
             neutralization=neutralization,
+            sector_cap_challenger=sector_cap_challenger,
             auxiliary_ablation=auxiliary_ablation,
         )
 
