@@ -22,7 +22,8 @@ class ResearchJobManifest:
     auxiliary_fingerprint: str | None = None
     auxiliary_features: tuple[str, ...] = ()
     universe_fingerprint: str | None = None
-    schema_version: int = 3
+    quality_fingerprint: str | None = None
+    schema_version: int = 4
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,7 @@ def make_job_manifest(
     auxiliary_fingerprint: str | None = None,
     auxiliary_features: tuple[str, ...] | list[str] = (),
     universe_fingerprint: str | None = None,
+    quality_fingerprint: str | None = None,
 ) -> ResearchJobManifest:
     normalized_auxiliary = tuple(sorted({str(value).strip() for value in auxiliary_features if str(value).strip()}))
     payload = {
@@ -67,6 +69,7 @@ def make_job_manifest(
         "auxiliary_fingerprint": auxiliary_fingerprint,
         "auxiliary_features": normalized_auxiliary,
         "universe_fingerprint": universe_fingerprint,
+        "quality_fingerprint": quality_fingerprint,
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
     job_id = hashlib.sha256(raw).hexdigest()[:24]
@@ -83,6 +86,7 @@ def make_job_manifest(
         auxiliary_fingerprint=auxiliary_fingerprint,
         auxiliary_features=normalized_auxiliary,
         universe_fingerprint=universe_fingerprint,
+        quality_fingerprint=quality_fingerprint,
     )
 
 
