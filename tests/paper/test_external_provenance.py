@@ -91,6 +91,26 @@ def test_external_provenance_verifies_artifact_snapshots_and_timeline(monkeypatc
     assert not report.broker_execution_available
 
 
+def test_external_provenance_report_exposes_verified_evidence_layers(monkeypatch, tmp_path):
+    _install_verified_sources(monkeypatch)
+
+    report = verify_frozen_paper_provenance(
+        [_row()],
+        artifact_dir=tmp_path / "artifact",
+        snapshot_root=tmp_path / "snapshots",
+    )
+
+    assert report.artifact_verified is True
+    assert report.model_hash_verified is True
+    assert report.artifact_strategy_match is True
+    assert report.artifact_cycle_match is True
+    assert report.signal_snapshots_verified == 1
+    assert report.realization_snapshots_verified == 1
+    assert report.snapshot_timeline_verified is True
+    assert report.observations_verified == 1
+    assert report.reasons == ()
+
+
 def test_external_provenance_rejects_artifact_identity_mismatch(monkeypatch, tmp_path):
     _install_verified_sources(monkeypatch, artifact_id="artifact-other")
 
