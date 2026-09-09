@@ -248,6 +248,15 @@ class SnapshotStore:
         validate_canonical_bars(bars)
         if len(bars) != manifest.row_count:
             raise ValueError("snapshot row count does not match manifest")
+
+        normalized_bars = bars.copy()
+        normalized_bars["symbol"] = normalized_bars["symbol"].astype(str).str.upper()
+        grouped = normalized_bars.groupby("symbol", sort=True)["timestamp"]
+        actual_first = {symbol: value.isoformat() for symbol, value in grouped.min().items()}
+        actual_last = {symbol: value.isoformat() for symbol, value in grouped.max().items()}
+        if actual_first != manifest.first_observation or actual_last != manifest.last_observation:
+            raise ValueError("snapshot observation bounds do not match bars")
+
         expected = SnapshotManifestInput(
             provider=manifest.provider,
             grade=manifest.grade,
