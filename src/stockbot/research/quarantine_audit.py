@@ -14,6 +14,9 @@ from stockbot.research.holdout import HoldoutConfig, HoldoutReport, evaluate_bli
 from stockbot.research.quarantine import QuarantineConfig, QuarantineManifest, split_sealed_quarantine
 
 
+_AUDIT_SCHEMA_VERSION = 1
+
+
 @dataclass(frozen=True)
 class FrozenStrategySpec:
     strategy_id: str
@@ -37,7 +40,7 @@ class QuarantineAuditRecord:
     passed: bool
     reasons: tuple[str, ...]
     audited_at: str
-    schema_version: int = 1
+    schema_version: int = _AUDIT_SCHEMA_VERSION
 
 
 @dataclass(frozen=True)
@@ -72,22 +75,75 @@ def freeze_strategy_spec(
     return FrozenStrategySpec(strategy_id=strategy_id, **payload)
 
 
+def _audit_identity_payload(
+    *,
+    quarantine_start: str,
+    quarantine_id: str,
+    strategy_id: str,
+    experiment_id: str,
+    score: float,
+    passed: bool,
+    reasons: tuple[str, ...],
+) -> dict[str, Any]:
+    return {
+        "quarantine_start": str(quarantine_start),
+        "quarantine_id": str(quarantine_id),
+        "strategy_id": str(strategy_id),
+        "experiment_id": str(experiment_id),
+        "score": float(score),
+        "passed": bool(passed),
+        "reasons": tuple(str(value) for value in reasons),
+    }
+
+
+def _audit_id(payload: dict[str, Any]) -> str:
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:24]
+
+
+def _verify_audit_record(record: QuarantineAuditRecord) -> None:
+    if int(record.schema_version) != _AUDIT_SCHEMA_VERSION:
+        raise ValueError("quarantine audit integrity violation: unsupported schema")
+    identity = _audit_identity_payload(
+        quarantine_start=record.quarantine_start,
+        quarantine_id=record.quarantine_id,
+        strategy_id=record.strategy_id,
+        experiment_id=record.experiment_id,
+        score=record.score,
+        passed=record.passed,
+        reasons=record.reasons,
+    )
+    if _audit_id(identity) != str(record.audit_id):
+        raise ValueError("quarantine audit integrity violation: audit ID mismatch")
+
+
 def _load_ledger(path: str | Path) -> list[QuarantineAuditRecord]:
     target = Path(path)
     if not target.exists():
         return []
-    payload = json.loads(target.read_text(encoding="utf-8"))
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("quarantine audit integrity violation: invalid ledger JSON") from exc
     if not isinstance(payload, list):
         raise ValueError("quarantine audit ledger must contain a JSON array")
-    return [
-        QuarantineAuditRecord(
-            **{
-                **item,
-                "reasons": tuple(item.get("reasons", ())),
-            }
-        )
-        for item in payload
-    ]
+
+    records: list[QuarantineAuditRecord] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            raise ValueError("quarantine audit integrity violation: audit record must be an object")
+        try:
+            record = QuarantineAuditRecord(
+                **{
+                    **item,
+                    "reasons": tuple(item.get("reasons", ())),
+                }
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("quarantine audit integrity violation: invalid audit record") from exc
+        _verify_audit_record(record)
+        records.append(record)
+    return records
 
 
 def _write_ledger(path: str | Path, records: list[QuarantineAuditRecord]) -> None:
@@ -130,7 +186,8 @@ def run_single_quarantine_audit(
 
     The function never performs candidate search. A persistent ledger refuses a second
     different strategy against the same quarantine boundary, preventing repeated audit
-    probing from becoming another hyperparameter-selection loop.
+    probing from becoming another hyperparameter-selection loop. Persisted audit records
+    are identity-verified before reuse so a changed pass/fail result fails closed.
     """
 
     split = split_sealed_quarantine(bars, quarantine_config)
@@ -149,19 +206,18 @@ def run_single_quarantine_audit(
         top_fraction=spec.top_fraction,
         weighting=spec.weighting,
     )
-    payload = {
-        "quarantine_start": split.manifest.start,
-        "quarantine_id": split.manifest.quarantine_id,
-        "strategy_id": spec.strategy_id,
-        "experiment_id": spec.experiment_id,
-        "score": float(report.score),
-        "passed": bool(report.passed),
-        "reasons": tuple(report.reasons),
-    }
-    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    identity = _audit_identity_payload(
+        quarantine_start=split.manifest.start,
+        quarantine_id=split.manifest.quarantine_id,
+        strategy_id=spec.strategy_id,
+        experiment_id=spec.experiment_id,
+        score=float(report.score),
+        passed=bool(report.passed),
+        reasons=tuple(report.reasons),
+    )
     record = QuarantineAuditRecord(
-        audit_id=hashlib.sha256(raw).hexdigest()[:24],
-        **payload,
+        audit_id=_audit_id(identity),
+        **identity,
         audited_at=datetime.now(timezone.utc).isoformat(),
     )
     records.append(record)
