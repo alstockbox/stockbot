@@ -7,7 +7,12 @@ import pandas as pd
 from stockbot.data.market_schema import validate_canonical_bars
 from stockbot.data.providers.http import ProviderError
 from stockbot.data.schemas import DataGrade
-from stockbot.data.snapshots import MarketSnapshot, SnapshotManifestInput, SnapshotStore
+from stockbot.data.snapshots import (
+    MarketSnapshot,
+    SnapshotManifestInput,
+    SnapshotStore,
+    compute_snapshot_fingerprint,
+)
 
 
 class DownloadError(RuntimeError):
@@ -30,6 +35,7 @@ def download_market_snapshot(
     *,
     grade: DataGrade | None = None,
     provenance: Mapping | None = None,
+    reuse_identical: bool = False,
 ) -> MarketSnapshot:
     universe = _symbols(symbols)
     start_ts = pd.Timestamp(start)
@@ -80,4 +86,9 @@ def download_market_snapshot(
         end=end_ts.date().isoformat(),
         provenance=provenance,
     )
+    if reuse_identical:
+        fingerprint = compute_snapshot_fingerprint(bars, manifest_input)
+        existing = store.find_verified_by_fingerprint(fingerprint)
+        if existing is not None:
+            return existing
     return store.write(bars, manifest_input)
