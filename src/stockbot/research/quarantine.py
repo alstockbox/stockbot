@@ -53,6 +53,29 @@ def _utc_timestamp(value: str | pd.Timestamp) -> pd.Timestamp:
     return timestamp.tz_convert("UTC")
 
 
+def _sealed_content_fingerprint(frame: pd.DataFrame) -> str:
+    canonical = frame.copy()
+    canonical["timestamp"] = pd.to_datetime(canonical["timestamp"], utc=True)
+    canonical["symbol"] = canonical["symbol"].astype(str).str.upper()
+    columns = tuple(sorted(canonical.columns, key=str))
+    canonical = canonical.loc[:, list(columns)]
+    row_hashes = sorted(
+        int(value)
+        for value in pd.util.hash_pandas_object(
+            canonical,
+            index=False,
+            categorize=False,
+        ).tolist()
+    )
+    payload = {
+        "columns": [str(value) for value in columns],
+        "dtypes": [str(canonical[column].dtype) for column in columns],
+        "row_hashes": row_hashes,
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
 def split_sealed_quarantine(
     bars: pd.DataFrame,
     config: QuarantineConfig,
@@ -98,6 +121,7 @@ def split_sealed_quarantine(
         "quarantine_periods": len(quarantine_dates),
         "development_rows": len(development),
         "quarantine_rows": len(quarantine),
+        "quarantine_content_fingerprint": _sealed_content_fingerprint(quarantine),
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     quarantine_id = hashlib.sha256(raw).hexdigest()[:24]
