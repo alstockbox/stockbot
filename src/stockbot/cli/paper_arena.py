@@ -625,5 +625,17 @@ def main(argv=None) -> int:
                     "broker_execution_available": False,
                 },
             )
+        if args.command == "deployment-review" and getattr(args, "report", None):
+            _write_json_atomic(
+                args.report,
+                {
+                    "schema_version": 1,
+                    "status": "error",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                    "eligible_for_manual_live_review": False,
+                    "broker_execution_available": False,
+                },
+            )
         parser.error(str(exc))
     return 2
