@@ -11,6 +11,10 @@ from stockbot.data.universe import PointInTimeUniverse
 from stockbot.features.cross_sectional import add_cross_sectional_features
 from stockbot.ml.models import ModelConfig
 from stockbot.research.objective import risk_adjusted_objective
+from stockbot.research.sector_exposure import (
+    SectorPortfolioExposureReport,
+    evaluate_sector_portfolio_exposure,
+)
 from stockbot.research.stress import StressReport, evaluate_stress_suite
 
 
@@ -51,6 +55,8 @@ class NeutralizationReport:
     average_abs_sector_mean_after: float
     factor_correlations_before: dict[str, float]
     factor_correlations_after: dict[str, float]
+    baseline_sector_exposure: SectorPortfolioExposureReport
+    neutralized_sector_exposure: SectorPortfolioExposureReport
     neutralized_predictions: pd.Series
     baseline_net_returns: pd.Series
     neutralized_net_returns: pd.Series
@@ -146,7 +152,9 @@ def evaluate_sector_factor_neutralization(
 
     Neutralization is performed independently inside each timestamp. Sector labels are
     queried as-of that timestamp and factor columns come from StockBot's causal feature
-    pipeline. This routine is diagnostic only and does not promote a strategy.
+    pipeline. Portfolio concentration is separately audited on one-bar-lagged executed
+    weights using sector classifications effective on the execution timestamp. This
+    routine is diagnostic only and does not promote a strategy.
     """
 
     cfg = config or NeutralizationConfig()
@@ -193,6 +201,23 @@ def evaluate_sector_factor_neutralization(
     if neutralized_count == 0:
         raise ValueError("neutralization produced no valid cross-sectional predictions")
 
+    baseline_sector_exposure = evaluate_sector_portfolio_exposure(
+        bars,
+        normalized,
+        universe,
+        top_fraction=top_fraction,
+        weighting=weighting,
+        min_sector_coverage=cfg.min_sector_coverage,
+    )
+    neutralized_sector_exposure = evaluate_sector_portfolio_exposure(
+        bars,
+        residualized,
+        universe,
+        top_fraction=top_fraction,
+        weighting=weighting,
+        min_sector_coverage=cfg.min_sector_coverage,
+    )
+
     experiment_config = ExperimentConfig(
         ModelConfig("ridge", {"alpha": 1.0}, seed=7),
         top_fraction=top_fraction,
@@ -237,6 +262,8 @@ def evaluate_sector_factor_neutralization(
         average_abs_sector_mean_after=_sector_mean_magnitude(residualized, sectors),
         factor_correlations_before=_factor_correlations(normalized, factors),
         factor_correlations_after=_factor_correlations(residualized, factors),
+        baseline_sector_exposure=baseline_sector_exposure,
+        neutralized_sector_exposure=neutralized_sector_exposure,
         neutralized_predictions=residualized,
         baseline_net_returns=baseline_returns,
         neutralized_net_returns=neutral_returns,
