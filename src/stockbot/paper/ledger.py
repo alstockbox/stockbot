@@ -9,6 +9,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from stockbot.paper.locking import exclusive_paper_ledger_write_lock, paper_ledger_write_lock_path
+
 
 _LEDGER_SCHEMA_VERSION = 1
 _LEDGER_SCHEMA_KEY = "__ledger_schema_version"
@@ -113,6 +115,7 @@ class PaperTradingLedger:
     Legacy unchained rows remain readable as a prefix for backward compatibility. The
     first newly appended chained row binds that entire legacy prefix into the chain, so
     later edits, deletions or reordering of historical rows fail closed on verification.
+    Verify + duplicate-check + append is serialized by a per-ledger OS writer lock.
     """
 
     def __init__(self, path: str | Path) -> None:
@@ -182,22 +185,24 @@ class PaperTradingLedger:
         return rows, tail_hash
 
     def append(self, observation: PaperObservation) -> None:
-        existing, tail_hash = self._read_verified()
-        key = (observation.strategy_id, observation.timestamp)
-        if any((row.strategy_id, row.timestamp) == key for row in existing):
-            raise ValueError("duplicate paper observation for strategy/timestamp")
+        lock_path = paper_ledger_write_lock_path(self.path)
+        with exclusive_paper_ledger_write_lock(lock_path):
+            existing, tail_hash = self._read_verified()
+            key = (observation.strategy_id, observation.timestamp)
+            if any((row.strategy_id, row.timestamp) == key for row in existing):
+                raise ValueError("duplicate paper observation for strategy/timestamp")
 
-        observation_payload = asdict(observation)
-        record_hash = _next_ledger_hash(tail_hash, observation_payload)
-        payload = dict(observation_payload)
-        payload[_LEDGER_SCHEMA_KEY] = _LEDGER_SCHEMA_VERSION
-        payload[_LEDGER_PREVIOUS_HASH_KEY] = tail_hash
-        payload[_LEDGER_RECORD_HASH_KEY] = record_hash
-        serialized = json.dumps(payload, sort_keys=True) + "\n"
-        with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(serialized)
-            handle.flush()
-            os.fsync(handle.fileno())
+            observation_payload = asdict(observation)
+            record_hash = _next_ledger_hash(tail_hash, observation_payload)
+            payload = dict(observation_payload)
+            payload[_LEDGER_SCHEMA_KEY] = _LEDGER_SCHEMA_VERSION
+            payload[_LEDGER_PREVIOUS_HASH_KEY] = tail_hash
+            payload[_LEDGER_RECORD_HASH_KEY] = record_hash
+            serialized = json.dumps(payload, sort_keys=True) + "\n"
+            with self.path.open("a", encoding="utf-8") as handle:
+                handle.write(serialized)
+                handle.flush()
+                os.fsync(handle.fileno())
 
     def records(self, *, strategy_id: str | None = None) -> list[PaperObservation]:
         rows, _ = self._read_verified()
