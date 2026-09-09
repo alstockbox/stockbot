@@ -62,12 +62,15 @@ def _quality_fingerprint(payload: dict) -> str:
 
 def _readiness_fingerprint(summary: dict) -> str:
     try:
-        score = summary["champion_paper_readiness_score"]
-        if score is None:
+        raw_score = summary["champion_paper_readiness_score"]
+        if raw_score is None:
             raise ValueError("research readiness score is missing")
+        score = float(raw_score)
+        if not math.isfinite(score) or not 0.0 <= score <= 1.0:
+            raise ValueError("research readiness score must be finite in [0,1]")
         payload = {
             "ready": bool(summary["champion_paper_ready"]),
-            "score": float(score),
+            "score": score,
             "reasons": [
                 str(value)
                 for value in (summary.get("champion_paper_readiness_reasons", ()) or ())
