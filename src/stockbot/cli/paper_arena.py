@@ -17,6 +17,7 @@ from stockbot.data.snapshots import SnapshotStore
 from stockbot.paper.arena import PaperArenaCriteria, evaluate_paper_track
 from stockbot.paper.ledger import PaperTradingLedger, make_paper_observation
 from stockbot.paper.locking import exclusive_shadow_command_lock, shadow_command_lock_path
+from stockbot.paper.provenance import verify_frozen_paper_provenance
 from stockbot.paper.runner import load_frozen_shadow_artifact, run_shadow_step
 
 
@@ -106,8 +107,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional atomic machine-readable JSON report for schedulers and monitoring",
     )
 
-    status = subparsers.add_parser("status", help="Evaluate accumulated forward paper evidence")
+    status = subparsers.add_parser(
+        "status",
+        help="Evaluate forward paper evidence with frozen artifact/snapshot verification",
+    )
     status.add_argument("--strategy-id", required=True)
+    status.add_argument("--artifact", required=True, help="Frozen shadow artifact directory")
+    status.add_argument(
+        "--snapshot-root",
+        required=True,
+        help="Root directory containing immutable StockBot snapshots referenced by the paper ledger",
+    )
     status.add_argument("--min-sessions", type=int, default=60)
     status.add_argument("--min-span-days", type=int, default=45)
     return parser
@@ -389,6 +399,11 @@ def run_from_args(args: argparse.Namespace) -> int:
             require_frozen_provenance=True,
         )
         report = evaluate_paper_track(records, criteria=criteria)
+        provenance_report = verify_frozen_paper_provenance(
+            records,
+            artifact_dir=args.artifact,
+            snapshot_root=args.snapshot_root,
+        )
         print(f"strategy_id={report.strategy_id}")
         print(f"sessions={report.sessions}")
         print(f"live_span_days={report.live_span_days}")
@@ -401,6 +416,10 @@ def run_from_args(args: argparse.Namespace) -> int:
         print(
             f"frozen_provenance_complete={'yes' if report.frozen_provenance_complete else 'no'}"
         )
+        print(
+            f"external_provenance_verified={'yes' if provenance_report.verified else 'no'}"
+        )
+        print(f"verified_snapshots={provenance_report.snapshots_verified}")
         if report.model_artifact_id is not None:
             print(f"model_artifact_id={report.model_artifact_id}")
         if report.research_cycle_id is not None:
