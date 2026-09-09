@@ -23,7 +23,7 @@ from stockbot.data.research_quality import (
 )
 from stockbot.data.snapshots import SnapshotStore
 from stockbot.research.deep_diagnostics import compact_deep_diagnostics
-from stockbot.research.deep_feedback import build_research_cycle_id
+from stockbot.research.deep_feedback import make_research_cycle_manifest
 from stockbot.research.factory import ResearchFactoryConfig
 from stockbot.research.jobs import make_job_manifest, make_run_summary, write_json_payload, write_json_record
 from stockbot.research.liquidity_execution import LiquidityExecutionConfig
@@ -319,14 +319,17 @@ def run_from_args(args: argparse.Namespace) -> int:
             None if point_in_time_universe is None else point_in_time_universe.fingerprint
         )
         quarantine_start = None if quarantine_config is None else quarantine_config.start
-        research_cycle_id = build_research_cycle_id(
+        deep_feedback_path = Path(args.factory_memory).with_name("deep-findings.jsonl")
+        research_cycle_manifest = make_research_cycle_manifest(
             dataset_fingerprint=manifest.dataset_fingerprint,
             quarantine_start=quarantine_start,
             universe_fingerprint=universe_fingerprint,
             auxiliary_fingerprint=auxiliary_fingerprint,
             quality_fingerprint=quality_fingerprint,
+            deep_feedback_path=deep_feedback_path,
+            deep_feedback_weight=args.factory_deep_feedback_weight,
         )
-        deep_feedback_path = Path(args.factory_memory).with_name("deep-findings.jsonl")
+        research_cycle_id = research_cycle_manifest.research_cycle_id
 
         config = ResearchFactoryConfig(
             horizons=horizons,
@@ -350,6 +353,7 @@ def run_from_args(args: argparse.Namespace) -> int:
         if args.factory_run_dir:
             run_dir = Path(args.factory_run_dir) / job_manifest.job_id
             write_json_record(run_dir / "job.json", job_manifest)
+            write_json_record(run_dir / "research_cycle.json", research_cycle_manifest)
             quality_payload = research_data_quality_payload(quality_report)
             quality_payload["quality_fingerprint"] = quality_fingerprint
             quality_payload["declared_grade"] = manifest.grade.value
