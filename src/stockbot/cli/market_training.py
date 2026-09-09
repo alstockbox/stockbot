@@ -14,6 +14,12 @@ from stockbot.data.research_inputs import (
     load_point_in_time_feature_store,
     load_point_in_time_universe,
 )
+from stockbot.data.research_quality import (
+    ResearchDataAttestation,
+    evaluate_research_data_quality,
+    research_data_quality_fingerprint,
+    verified_data_grade,
+)
 from stockbot.data.snapshots import SnapshotStore
 from stockbot.research.deep_diagnostics import compact_deep_diagnostics
 from stockbot.research.factory import ResearchFactoryConfig
@@ -180,6 +186,22 @@ def _parse_positive_floats(value: str, label: str) -> tuple[float, ...]:
 
 def _parse_horizons(value: str) -> tuple[int, ...]:
     return _parse_positive_ints(value, "factory horizons")
+
+
+def _evaluate_factory_data_quality(snapshot, point_in_time_universe, args):
+    attestation = ResearchDataAttestation(
+        adjusted_prices_verified=bool(args.factory_attest_adjusted_prices_verified),
+        corporate_actions_complete=bool(args.factory_attest_corporate_actions_complete),
+        corporate_actions_point_in_time=bool(args.factory_attest_corporate_actions_point_in_time),
+    )
+    report = evaluate_research_data_quality(
+        snapshot.bars,
+        universe=point_in_time_universe,
+        attestation=attestation,
+    )
+    fingerprint = research_data_quality_fingerprint(report)
+    effective_grade = verified_data_grade(snapshot.manifest.grade, report)
+    return report, fingerprint, effective_grade
 
 
 def run_from_args(args: argparse.Namespace) -> int:
