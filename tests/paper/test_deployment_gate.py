@@ -4,10 +4,27 @@ from stockbot.data.schemas import DataGrade
 from stockbot.paper.deployment_gate import evaluate_deployment_evidence
 
 
+def _verified_provenance(**overrides):
+    payload = {
+        "verified": True,
+        "artifact_verified": True,
+        "model_hash_verified": True,
+        "artifact_strategy_match": True,
+        "artifact_cycle_match": True,
+        "signal_snapshots_verified": 1,
+        "realization_snapshots_verified": 1,
+        "snapshot_timeline_verified": True,
+        "observations_verified": 1,
+        "reasons": (),
+    }
+    payload.update(overrides)
+    return SimpleNamespace(**payload)
+
+
 def test_manual_live_review_requires_all_independent_evidence_layers():
     audit = SimpleNamespace(holdout_report=SimpleNamespace(passed=True))
     paper = SimpleNamespace(live_eligible=True, frozen_provenance_complete=True)
-    provenance = SimpleNamespace(verified=True)
+    provenance = _verified_provenance()
     report = evaluate_deployment_evidence(
         research_ready=True,
         data_grade=DataGrade.RESEARCH_GRADE,
@@ -54,6 +71,24 @@ def test_internal_lineage_flags_are_not_enough_without_external_verification():
     )
 
     assert report.paper_frozen_provenance_complete
+    assert not report.paper_external_provenance_verified
+    assert not report.eligible_for_manual_live_review
+    assert "forward_paper_external_provenance_not_verified" in report.reasons
+
+
+def test_aggregate_verified_flag_is_not_enough_when_granular_provenance_is_incomplete():
+    audit = SimpleNamespace(holdout_report=SimpleNamespace(passed=True))
+    paper = SimpleNamespace(live_eligible=True, frozen_provenance_complete=True)
+    provenance = _verified_provenance(model_hash_verified=False)
+
+    report = evaluate_deployment_evidence(
+        research_ready=True,
+        data_grade=DataGrade.RESEARCH_GRADE,
+        quarantine_audit=audit,
+        paper_report=paper,
+        paper_provenance_report=provenance,
+    )
+
     assert not report.paper_external_provenance_verified
     assert not report.eligible_for_manual_live_review
     assert "forward_paper_external_provenance_not_verified" in report.reasons
