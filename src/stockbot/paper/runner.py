@@ -75,6 +75,7 @@ class ShadowStepResult:
     pending_signal_timestamp: str
     target_weights: dict[str, float]
     observation: PaperObservation | None
+    idempotent_replay: bool = False
     broker_execution_available: bool = False
 
 
@@ -535,6 +536,7 @@ def run_shadow_step(
                 pending_signal_timestamp=state.pending_signal_timestamp,
                 target_weights=dict(state.pending_target_weights),
                 observation=None,
+                idempotent_replay=True,
                 broker_execution_available=False,
             )
 
@@ -586,5 +588,6 @@ def run_shadow_step(
         pending_signal_timestamp=latest_timestamp.isoformat(),
         target_weights=approved_targets,
         observation=observation,
+        idempotent_replay=False,
         broker_execution_available=False,
     )
