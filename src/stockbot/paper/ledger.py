@@ -24,6 +24,16 @@ _LEDGER_METADATA_KEYS = {
 _LEDGER_GENESIS_HASH = hashlib.sha256(b"stockbot-paper-ledger-v1").hexdigest()
 
 
+def _parse_aware_timestamp(value: str, *, name: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"{name} must be ISO-8601") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"{name} must be timezone-aware")
+    return parsed
+
+
 @dataclass(frozen=True)
 class PaperObservation:
     strategy_id: str
@@ -47,15 +57,11 @@ class PaperObservation:
     def __post_init__(self) -> None:
         if not self.strategy_id:
             raise ValueError("strategy_id is required")
-        try:
-            datetime.fromisoformat(self.timestamp.replace("Z", "+00:00"))
-        except ValueError as exc:
-            raise ValueError("timestamp must be ISO-8601") from exc
+        realization_time = _parse_aware_timestamp(self.timestamp, name="timestamp")
         if self.signal_timestamp is not None:
-            try:
-                datetime.fromisoformat(self.signal_timestamp.replace("Z", "+00:00"))
-            except ValueError as exc:
-                raise ValueError("signal_timestamp must be ISO-8601") from exc
+            signal_time = _parse_aware_timestamp(self.signal_timestamp, name="signal_timestamp")
+            if signal_time >= realization_time:
+                raise ValueError("signal_timestamp must precede realization timestamp")
         for name, value in (
             ("net_return", self.net_return),
             ("benchmark_return", self.benchmark_return),
@@ -115,7 +121,8 @@ class PaperTradingLedger:
     Legacy unchained rows remain readable as a prefix for backward compatibility. The
     first newly appended chained row binds that entire legacy prefix into the chain, so
     later edits, deletions or reordering of historical rows fail closed on verification.
-    Verify + duplicate-check + append is serialized by a per-ledger OS writer lock.
+    Verify + chronology check + duplicate-check + append is serialized by a per-ledger
+    OS writer lock. Each strategy's realization timestamps must advance strictly forward.
     """
 
     def __init__(self, path: str | Path) -> None:
@@ -157,8 +164,6 @@ class PaperTradingLedger:
                     raise ValueError(
                         f"paper ledger integrity violation at line {line_number}: unchained row after chain start"
                     )
-                # Fold legacy rows into the rolling hash. They remain readable, but the
-                # first chained append will anchor the entire legacy prefix.
                 tail_hash = expected_hash
             else:
                 try:
@@ -191,6 +196,18 @@ class PaperTradingLedger:
             key = (observation.strategy_id, observation.timestamp)
             if any((row.strategy_id, row.timestamp) == key for row in existing):
                 raise ValueError("duplicate paper observation for strategy/timestamp")
+
+            strategy_rows = [row for row in existing if row.strategy_id == observation.strategy_id]
+            if strategy_rows:
+                latest_existing = max(
+                    _parse_aware_timestamp(row.timestamp, name="timestamp")
+                    for row in strategy_rows
+                )
+                incoming = _parse_aware_timestamp(observation.timestamp, name="timestamp")
+                if incoming <= latest_existing:
+                    raise ValueError(
+                        "paper observation timestamps must be strictly increasing per strategy"
+                    )
 
             observation_payload = asdict(observation)
             record_hash = _next_ledger_hash(tail_hash, observation_payload)
