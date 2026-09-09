@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import stockbot.research.quarantine_audit as quarantine_audit_module
 from stockbot.research.holdout import HoldoutConfig
 from stockbot.research.quarantine import QuarantineConfig
 from stockbot.research.quarantine_audit import freeze_strategy_spec, run_single_quarantine_audit
@@ -134,4 +135,40 @@ def test_quarantine_audit_rejects_tampered_persisted_result(tmp_path):
             spec,
             ledger_path=ledger,
             holdout_config=_relaxed_holdout(),
+        )
+
+
+def test_verified_quarantine_audit_lookup_requires_matching_cycle_and_strategy(tmp_path):
+    bars = _bars()
+    quarantine = _quarantine()
+    spec = freeze_strategy_spec(_candidate("candidate-a", 1.0), top_fraction=0.25, weighting="equal")
+    ledger = tmp_path / "audit-ledger.json"
+
+    result = run_single_quarantine_audit(
+        bars,
+        quarantine,
+        spec,
+        ledger_path=ledger,
+        holdout_config=_relaxed_holdout(),
+    )
+
+    record = quarantine_audit_module.load_verified_quarantine_audit_record(
+        ledger,
+        quarantine_start=result.manifest.start,
+        strategy_id=spec.strategy_id,
+    )
+    assert record.audit_id == result.record.audit_id
+    assert record.strategy_id == spec.strategy_id
+
+    with pytest.raises(ValueError, match="strategy"):
+        quarantine_audit_module.load_verified_quarantine_audit_record(
+            ledger,
+            quarantine_start=result.manifest.start,
+            strategy_id="different-strategy",
+        )
+    with pytest.raises(ValueError, match="not found"):
+        quarantine_audit_module.load_verified_quarantine_audit_record(
+            ledger,
+            quarantine_start="2030-01-01",
+            strategy_id=spec.strategy_id,
         )
