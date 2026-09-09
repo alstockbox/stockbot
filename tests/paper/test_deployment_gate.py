@@ -7,15 +7,18 @@ from stockbot.paper.deployment_gate import evaluate_deployment_evidence
 def test_manual_live_review_requires_all_independent_evidence_layers():
     audit = SimpleNamespace(holdout_report=SimpleNamespace(passed=True))
     paper = SimpleNamespace(live_eligible=True, frozen_provenance_complete=True)
+    provenance = SimpleNamespace(verified=True)
     report = evaluate_deployment_evidence(
         research_ready=True,
         data_grade=DataGrade.RESEARCH_GRADE,
         quarantine_audit=audit,
         paper_report=paper,
+        paper_provenance_report=provenance,
     )
 
     assert report.eligible_for_manual_live_review
     assert report.paper_frozen_provenance_complete
+    assert report.paper_external_provenance_verified
     assert report.hard_risk_engine_required
     assert not report.broker_execution_available
     assert report.reasons == ()
@@ -34,4 +37,23 @@ def test_missing_audit_and_forward_paper_blocks_manual_live_review():
     assert "sealed_quarantine_audit_not_passed" in report.reasons
     assert "forward_paper_evidence_not_ready" in report.reasons
     assert "forward_paper_provenance_not_verified" in report.reasons
+    assert "forward_paper_external_provenance_not_verified" in report.reasons
     assert not report.broker_execution_available
+
+
+def test_internal_lineage_flags_are_not_enough_without_external_verification():
+    audit = SimpleNamespace(holdout_report=SimpleNamespace(passed=True))
+    paper = SimpleNamespace(live_eligible=True, frozen_provenance_complete=True)
+
+    report = evaluate_deployment_evidence(
+        research_ready=True,
+        data_grade=DataGrade.RESEARCH_GRADE,
+        quarantine_audit=audit,
+        paper_report=paper,
+        paper_provenance_report=None,
+    )
+
+    assert report.paper_frozen_provenance_complete
+    assert not report.paper_external_provenance_verified
+    assert not report.eligible_for_manual_live_review
+    assert "forward_paper_external_provenance_not_verified" in report.reasons
