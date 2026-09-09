@@ -187,9 +187,6 @@ def _select_latest_compatible_snapshot(snapshot_root: str | Path, artifact_symbo
     store = SnapshotStore(root)
     compatible = []
     for snapshot_id in snapshot_ids:
-        # Deliberately verify every snapshot directory before using it. A corrupt
-        # immutable snapshot is an integrity event, not a reason to silently roll
-        # backward to older market data.
         snapshot = store.load(snapshot_id)
         if tuple(snapshot.manifest.symbols) != expected_symbols:
             continue
@@ -218,9 +215,6 @@ def _execute_shadow_snapshot(args: argparse.Namespace, snapshot, *, provider_ref
     if args.data_age_seconds is not None:
         data_age_seconds = float(args.data_age_seconds)
     elif provider_refresh_verified:
-        # The cycle command reaches this path only after the provider refresh has
-        # completed successfully in the current process. An identical persisted
-        # snapshot may be reused, but the market dataset was just re-verified.
         data_age_seconds = 0.0
     else:
         data_age_seconds = _snapshot_data_age_seconds(snapshot)
@@ -392,6 +386,7 @@ def run_from_args(args: argparse.Namespace) -> int:
         criteria = PaperArenaCriteria(
             min_sessions=args.min_sessions,
             min_live_span_days=args.min_span_days,
+            require_frozen_provenance=True,
         )
         report = evaluate_paper_track(records, criteria=criteria)
         print(f"strategy_id={report.strategy_id}")
@@ -403,6 +398,13 @@ def run_from_args(args: argparse.Namespace) -> int:
         print(f"paper_max_drawdown={report.metrics.get('max_drawdown', float('nan')):.6f}")
         print(f"average_fill_rate={report.average_fill_rate:.6f}")
         print(f"evidence_score={report.evidence_score:.6f}")
+        print(
+            f"frozen_provenance_complete={'yes' if report.frozen_provenance_complete else 'no'}"
+        )
+        if report.model_artifact_id is not None:
+            print(f"model_artifact_id={report.model_artifact_id}")
+        if report.research_cycle_id is not None:
+            print(f"research_cycle_id={report.research_cycle_id}")
         print(f"live_evidence_eligible={'yes' if report.live_eligible else 'no'}")
         print("reasons=" + (",".join(report.reasons) if report.reasons else "none"))
         print("broker_execution=disabled")
