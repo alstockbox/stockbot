@@ -59,6 +59,7 @@ DEFAULT_FORECAST_HORIZONS = (
 
 _DATE_KEYS = (
     "date",
+    "dt",
     "period",
     "observation_date",
     "observationDate",
@@ -68,15 +69,19 @@ _DATE_KEYS = (
     "timePeriod",
 )
 _AVAILABLE_KEYS = (
-    "cutoff_date",
-    "cutoffDate",
-    "cutOffDate",
+    "policy_round_end_dtm",
+    "policyRoundEndDtm",
     "publication_date",
     "publicationDate",
     "published_at",
     "publishedAt",
     "available_time",
     "availableTime",
+    "forecast_cutoff_date",
+    "forecastCutoffDate",
+    "cutoff_date",
+    "cutoffDate",
+    "cutOffDate",
 )
 _VALUE_KEYS = ("value", "Value")
 _ROUND_KEYS = ("policy_round_name", "policyRoundName", "policy_round", "policyRound")
@@ -113,6 +118,53 @@ def _numeric_value(value) -> float:
     return result
 
 
+def _flatten_live_vintages(rows: list[dict]) -> list[dict]:
+    nested_flags = ["vintages" in row for row in rows]
+    if not any(nested_flags):
+        return rows
+    if not all(nested_flags):
+        raise ProviderError("Riksbank returned mixed monetary-policy payload shapes")
+
+    flattened: list[dict] = []
+    for series_row in rows:
+        raw_vintages = series_row.get("vintages")
+        if isinstance(raw_vintages, dict):
+            vintages = [raw_vintages]
+        elif isinstance(raw_vintages, list):
+            vintages = raw_vintages
+        else:
+            raise ProviderError("Riksbank returned malformed monetary-policy vintages")
+        if not vintages:
+            raise ProviderError("Riksbank returned no monetary-policy vintages")
+
+        for vintage in vintages:
+            if not isinstance(vintage, dict):
+                raise ProviderError("Riksbank returned malformed monetary-policy vintage")
+            metadata = vintage.get("metadata")
+            observations = vintage.get("observations")
+            if not isinstance(metadata, dict):
+                raise ProviderError("Riksbank monetary-policy vintage lacks metadata")
+            if not isinstance(observations, list) or not observations:
+                raise ProviderError("Riksbank monetary-policy vintage lacks observations")
+
+            available = _first(metadata, _AVAILABLE_KEYS)
+            round_name = _first(metadata, _ROUND_KEYS)
+            if available is None:
+                raise ProviderError("Riksbank monetary-policy vintage lacks cutoff/publication time")
+            if round_name is None:
+                raise ProviderError("Riksbank monetary-policy vintage lacks policy round")
+
+            for observation in observations:
+                if not isinstance(observation, dict):
+                    raise ProviderError("Riksbank returned malformed monetary-policy observation")
+                row = dict(observation)
+                row.setdefault("available_time", available)
+                row.setdefault("policy_round", round_name)
+                flattened.append(row)
+
+    return flattened
+
+
 def _rows_from_payload(payload) -> tuple[list[dict], dict]:
     if isinstance(payload, list):
         rows = payload
@@ -137,7 +189,7 @@ def _rows_from_payload(payload) -> tuple[list[dict], dict]:
         raise ProviderError("Riksbank returned no monetary-policy rows")
     if not all(isinstance(row, dict) for row in rows):
         raise ProviderError("Riksbank returned malformed monetary-policy row")
-    return list(rows), metadata
+    return _flatten_live_vintages(list(rows)), metadata
 
 
 def policy_round_names(payload) -> tuple[str, ...]:
