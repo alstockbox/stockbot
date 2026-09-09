@@ -1,12 +1,20 @@
 import os
 import subprocess
 import sys
+from types import SimpleNamespace
 
+import pandas as pd
 import pytest
 
-from stockbot.cli.market_training import build_parser, resolve_provider
+from stockbot.cli.market_training import (
+    _evaluate_factory_data_quality,
+    build_parser,
+    resolve_provider,
+)
 from stockbot.data.providers.http import ProviderError
 from stockbot.data.providers.yahoo_bootstrap import YahooBootstrapProvider
+from stockbot.data.schemas import DataGrade
+from stockbot.data.universe import PointInTimeUniverse, UniverseManifest, UniverseMembership
 
 
 def test_cli_parser_accepts_required_market_download_arguments(tmp_path):
@@ -84,6 +92,88 @@ def test_cli_parser_accepts_explicit_research_data_attestations():
     assert args.factory_attest_adjusted_prices_verified is True
     assert args.factory_attest_corporate_actions_complete is True
     assert args.factory_attest_corporate_actions_point_in_time is True
+
+
+def _quality_bars() -> pd.DataFrame:
+    rows = []
+    for symbol in ("AAA", "BBB"):
+        for dt in pd.date_range("2025-01-02", periods=3, freq="B", tz="UTC"):
+            rows.append(
+                {
+                    "timestamp": dt,
+                    "symbol": symbol,
+                    "open": 100.0,
+                    "high": 102.0,
+                    "low": 99.0,
+                    "close": 101.0,
+                    "volume": 1_000_000.0,
+                    "adj_open": 100.0,
+                    "adj_high": 102.0,
+                    "adj_low": 99.0,
+                    "adj_close": 101.0,
+                    "adj_volume": 1_000_000.0,
+                    "div_cash": 0.0,
+                    "split_factor": 1.0,
+                    "provider": "verified-test",
+                    "retrieved_at": pd.Timestamp("2025-01-10T20:00:00Z"),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def _quality_universe() -> PointInTimeUniverse:
+    return PointInTimeUniverse(
+        (
+            UniverseMembership("AAA", "2020-01-01"),
+            UniverseMembership("BBB", "2020-01-01"),
+            UniverseMembership("OLD", "2020-01-01", "2024-12-31", delisted=True),
+        ),
+        UniverseManifest(
+            source="verified-universe",
+            survivorship_bias_controlled=True,
+            includes_delisted_securities=True,
+            point_in_time_membership=True,
+        ),
+    )
+
+
+def _quality_args() -> SimpleNamespace:
+    return SimpleNamespace(
+        factory_attest_adjusted_prices_verified=True,
+        factory_attest_corporate_actions_complete=True,
+        factory_attest_corporate_actions_point_in_time=True,
+    )
+
+
+def test_factory_quality_helper_fails_closed_without_point_in_time_universe():
+    snapshot = SimpleNamespace(
+        bars=_quality_bars(),
+        manifest=SimpleNamespace(grade=DataGrade.RESEARCH_GRADE),
+    )
+    report, fingerprint, effective_grade = _evaluate_factory_data_quality(
+        snapshot,
+        None,
+        _quality_args(),
+    )
+    assert not report.research_grade_eligible
+    assert "point_in_time_universe_missing" in report.reasons
+    assert len(fingerprint) == 64
+    assert effective_grade is DataGrade.BOOTSTRAP
+
+
+def test_factory_quality_helper_never_upgrades_bootstrap_declared_grade():
+    snapshot = SimpleNamespace(
+        bars=_quality_bars(),
+        manifest=SimpleNamespace(grade=DataGrade.BOOTSTRAP),
+    )
+    report, fingerprint, effective_grade = _evaluate_factory_data_quality(
+        snapshot,
+        _quality_universe(),
+        _quality_args(),
+    )
+    assert report.research_grade_eligible
+    assert len(fingerprint) == 64
+    assert effective_grade is DataGrade.BOOTSTRAP
 
 
 def test_resolve_provider_requires_tiingo_token(monkeypatch):
