@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -143,6 +144,8 @@ def _load_ledger(path: str | Path) -> list[QuarantineAuditRecord]:
             raise ValueError("quarantine audit integrity violation: audit passed must be boolean")
         if isinstance(item.get("score"), bool) or not isinstance(item.get("score"), (int, float)):
             raise ValueError("quarantine audit integrity violation: audit score must be numeric")
+        if not math.isfinite(float(item["score"])):
+            raise ValueError("quarantine audit integrity violation: audit score must be finite")
         try:
             record = QuarantineAuditRecord(
                 **{
