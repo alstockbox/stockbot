@@ -8,6 +8,8 @@ from stockbot.paper.provenance import verify_frozen_paper_provenance
 
 def _row(
     *,
+    timestamp: str = "2026-09-02T16:00:00+00:00",
+    signal_timestamp: str = "2026-09-01T16:00:00+00:00",
     artifact_id: str = "artifact-a",
     cycle_id: str = "cycle-a",
     signal_fingerprint: str = "snapshot-signal",
@@ -15,7 +17,7 @@ def _row(
 ) -> PaperObservation:
     return PaperObservation(
         strategy_id="strategy-a",
-        timestamp="2026-09-02T16:00:00+00:00",
+        timestamp=timestamp,
         net_return=0.001,
         benchmark_return=0.0,
         turnover=0.2,
@@ -24,7 +26,7 @@ def _row(
         signal_count=2,
         research_cycle_id=cycle_id,
         model_artifact_id=artifact_id,
-        signal_timestamp="2026-09-01T16:00:00+00:00",
+        signal_timestamp=signal_timestamp,
         signal_snapshot_fingerprint=signal_fingerprint,
         realization_snapshot_fingerprint=realization_fingerprint,
     )
@@ -145,6 +147,39 @@ def test_external_provenance_rejects_snapshot_universe_mismatch(monkeypatch, tmp
     with pytest.raises(ValueError, match="universe"):
         verify_frozen_paper_provenance(
             [_row()],
+            artifact_dir=tmp_path / "artifact",
+            snapshot_root=tmp_path / "snapshots",
+        )
+
+
+def test_external_provenance_requires_continuous_forward_snapshot_chain(monkeypatch, tmp_path):
+    rows = [
+        _row(
+            signal_fingerprint="snapshot-1",
+            realization_fingerprint="snapshot-2",
+        ),
+        _row(
+            timestamp="2026-09-03T16:00:00+00:00",
+            signal_timestamp="2026-09-02T16:00:00+00:00",
+            signal_fingerprint="snapshot-2-alternate",
+            realization_fingerprint="snapshot-3",
+        ),
+    ]
+    _install_verified_sources(
+        monkeypatch,
+        snapshots={
+            "snapshot-1": _snapshot("snapshot-1", "2026-09-01T16:00:00+00:00"),
+            "snapshot-2": _snapshot("snapshot-2", "2026-09-02T16:00:00+00:00"),
+            "snapshot-2-alternate": _snapshot(
+                "snapshot-2-alternate", "2026-09-02T16:00:00+00:00"
+            ),
+            "snapshot-3": _snapshot("snapshot-3", "2026-09-03T16:00:00+00:00"),
+        },
+    )
+
+    with pytest.raises(ValueError, match="continuity"):
+        verify_frozen_paper_provenance(
+            rows,
             artifact_dir=tmp_path / "artifact",
             snapshot_root=tmp_path / "snapshots",
         )
