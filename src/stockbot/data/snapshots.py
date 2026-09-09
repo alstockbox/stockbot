@@ -144,6 +144,33 @@ class SnapshotStore:
     def __init__(self, root) -> None:
         self.root = Path(root)
 
+    def find_verified_by_fingerprint(self, dataset_fingerprint: str) -> MarketSnapshot | None:
+        """Return the canonical verified snapshot for an existing dataset fingerprint.
+
+        The lookup is intentionally strict: every snapshot directory encountered is
+        loaded through the normal integrity checks. Corruption is therefore surfaced
+        instead of being hidden by silently reusing a different snapshot.
+        """
+
+        fingerprint = str(dataset_fingerprint).strip()
+        if not fingerprint:
+            raise ValueError("dataset_fingerprint is required")
+        if not self.root.exists():
+            return None
+        if not self.root.is_dir():
+            raise ValueError("snapshot root must be a directory")
+
+        matches: list[MarketSnapshot] = []
+        for child in sorted(self.root.iterdir(), key=lambda path: path.name):
+            if not child.is_dir():
+                continue
+            snapshot = self.load(child.name)
+            if snapshot.manifest.dataset_fingerprint == fingerprint:
+                matches.append(snapshot)
+        if not matches:
+            return None
+        return min(matches, key=lambda item: (item.manifest.created_at, item.snapshot_id))
+
     def write(
         self,
         bars: pd.DataFrame,
