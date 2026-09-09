@@ -84,6 +84,7 @@ def _audit_identity_payload(
     score: float,
     passed: bool,
     reasons: tuple[str, ...],
+    audited_at: str,
 ) -> dict[str, Any]:
     return {
         "quarantine_start": str(quarantine_start),
@@ -93,6 +94,7 @@ def _audit_identity_payload(
         "score": float(score),
         "passed": bool(passed),
         "reasons": tuple(str(value) for value in reasons),
+        "audited_at": str(audited_at),
     }
 
 
@@ -112,6 +114,7 @@ def _verify_audit_record(record: QuarantineAuditRecord) -> None:
         score=record.score,
         passed=record.passed,
         reasons=record.reasons,
+        audited_at=record.audited_at,
     )
     if _audit_id(identity) != str(record.audit_id):
         raise ValueError("quarantine audit integrity violation: audit ID mismatch")
@@ -228,6 +231,7 @@ def run_single_quarantine_audit(
         top_fraction=spec.top_fraction,
         weighting=spec.weighting,
     )
+    audited_at = datetime.now(timezone.utc).isoformat()
     identity = _audit_identity_payload(
         quarantine_start=split.manifest.start,
         quarantine_id=split.manifest.quarantine_id,
@@ -236,11 +240,11 @@ def run_single_quarantine_audit(
         score=float(report.score),
         passed=bool(report.passed),
         reasons=tuple(report.reasons),
+        audited_at=audited_at,
     )
     record = QuarantineAuditRecord(
         audit_id=_audit_id(identity),
         **identity,
-        audited_at=datetime.now(timezone.utc).isoformat(),
     )
     records.append(record)
     _write_ledger(ledger_path, records)
