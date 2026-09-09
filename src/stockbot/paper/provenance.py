@@ -58,16 +58,6 @@ def _utc_timestamp(value: str, *, label: str) -> pd.Timestamp:
     return parsed.tz_convert("UTC")
 
 
-def _snapshot_latest_timestamp(snapshot) -> pd.Timestamp:
-    last_observation = getattr(snapshot.manifest, "last_observation", None)
-    if not isinstance(last_observation, dict) or not last_observation:
-        raise ValueError("verified snapshot is missing last-observation timestamp evidence")
-    return max(
-        _utc_timestamp(str(value), label="snapshot last-observation timestamp")
-        for value in last_observation.values()
-    )
-
-
 def _normalized_symbols(values) -> tuple[str, ...]:
     return tuple(sorted(str(value).strip().upper() for value in values if str(value).strip()))
 
@@ -90,9 +80,22 @@ def _verify_snapshot(
     if _normalized_symbols(manifest.symbols) != expected_symbols:
         raise ValueError("paper snapshot universe does not match frozen artifact universe")
 
-    latest = _snapshot_latest_timestamp(snapshot)
+    last_observation = getattr(manifest, "last_observation", None)
+    if not isinstance(last_observation, dict) or not last_observation:
+        raise ValueError("verified snapshot is missing last-observation timestamp evidence")
+    normalized_last_observation = {
+        str(symbol).strip().upper(): _utc_timestamp(
+            str(value),
+            label="snapshot last-observation timestamp",
+        )
+        for symbol, value in last_observation.items()
+        if str(symbol).strip()
+    }
+    if tuple(sorted(normalized_last_observation)) != expected_symbols:
+        raise ValueError("verified snapshot last-observation universe does not match frozen artifact universe")
+
     expected = _utc_timestamp(expected_timestamp, label="paper provenance timestamp")
-    if latest != expected:
+    if any(timestamp != expected for timestamp in normalized_last_observation.values()):
         raise ValueError(
             "paper snapshot timestamp does not match the observation provenance timestamp"
         )
