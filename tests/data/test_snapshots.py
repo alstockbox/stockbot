@@ -93,3 +93,19 @@ def test_snapshot_store_rejects_tampered_observation_bounds(tmp_path):
 
     with pytest.raises(ValueError, match="observation bounds"):
         store.load(snapshot.snapshot_id)
+
+
+def test_snapshot_store_rejects_tampered_created_at_identity(tmp_path):
+    store = SnapshotStore(tmp_path)
+    snapshot = store.write(
+        _bars(),
+        _input(),
+        created_at=datetime(2026, 1, 10, 12, 0, tzinfo=timezone.utc),
+    )
+    manifest_path = snapshot.path / "manifest.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["created_at"] = "2026-01-11T12:00:00Z"
+    manifest_path.write_text(json.dumps(payload, sort_keys=True, indent=2), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="snapshot identity"):
+        store.load(snapshot.snapshot_id)
