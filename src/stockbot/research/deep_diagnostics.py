@@ -38,7 +38,7 @@ class CandidateDeepDiagnostics:
     window_robustness: WindowRobustnessReport
     feature_ablation: FeatureAblationReport
     neutralization: NeutralizationReport | None = None
-    sector_cap_challenger: SectorCapAllocationReport | None = None
+    sector_cap: SectorCapAllocationReport | None = None
     auxiliary_ablation: AuxiliaryAblationReport | None = None
 
 
@@ -187,7 +187,7 @@ def run_deep_research_diagnostics(
         replay_feature_names = artifact_feature_names or None
 
         neutralization = None
-        sector_cap_challenger = None
+        sector_cap = None
         if point_in_time_universe is not None:
             neutralization = evaluate_sector_factor_neutralization(
                 research_bars,
@@ -196,7 +196,7 @@ def run_deep_research_diagnostics(
                 top_fraction=best_policy.top_fraction,
                 weighting=best_policy.weighting,
             )
-            sector_cap_challenger = evaluate_sector_cap_challenger(
+            sector_cap = evaluate_sector_cap_challenger(
                 research_bars,
                 candidate.result.predictions,
                 point_in_time_universe,
@@ -276,7 +276,7 @@ def run_deep_research_diagnostics(
             window_robustness=windows,
             feature_ablation=ablation,
             neutralization=neutralization,
-            sector_cap_challenger=sector_cap_challenger,
+            sector_cap=sector_cap,
             auxiliary_ablation=auxiliary_ablation,
         )
 
