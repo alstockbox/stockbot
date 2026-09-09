@@ -13,6 +13,7 @@ from stockbot.data.providers.http import ProviderError
 from stockbot.data.providers.tiingo import TiingoProvider
 from stockbot.data.providers.yahoo_bootstrap import YahooBootstrapProvider
 from stockbot.data.research_inputs import load_point_in_time_feature_store
+from stockbot.data.schemas import DataGrade
 from stockbot.data.snapshots import SnapshotStore
 from stockbot.paper.arena import PaperArenaCriteria, evaluate_paper_track
 from stockbot.paper.deployment_gate import (
@@ -23,7 +24,12 @@ from stockbot.paper.ledger import PaperTradingLedger, make_paper_observation
 from stockbot.paper.locking import exclusive_shadow_command_lock, shadow_command_lock_path
 from stockbot.paper.provenance import verify_frozen_paper_provenance
 from stockbot.paper.runner import load_frozen_shadow_artifact, run_shadow_step
-from stockbot.research.quarantine_audit import load_verified_quarantine_audit_record
+from stockbot.research.quarantine import QuarantineConfig
+from stockbot.research.quarantine_audit import (
+    FrozenStrategySpec,
+    load_verified_quarantine_audit_record,
+    run_single_quarantine_audit,
+)
 
 
 def _parse_names(value: str | None) -> tuple[str, ...] | None:
@@ -130,6 +136,34 @@ def build_parser() -> argparse.ArgumentParser:
     )
     status.add_argument("--min-sessions", type=int, default=60)
     status.add_argument("--min-span-days", type=int, default=45)
+
+    quarantine_audit = subparsers.add_parser(
+        "quarantine-audit",
+        help=(
+            "Run the one-time sealed-quarantine audit for a verified research-grade frozen champion"
+        ),
+    )
+    quarantine_audit.add_argument("--artifact", required=True, help="Frozen shadow artifact directory")
+    quarantine_audit.add_argument(
+        "--snapshot-root",
+        required=True,
+        help="Root directory containing the immutable research snapshot",
+    )
+    quarantine_audit.add_argument(
+        "--research-run",
+        required=True,
+        help="Research run directory containing verified job/cycle/quality/summary evidence",
+    )
+    quarantine_audit.add_argument(
+        "--audit-ledger",
+        required=True,
+        help="Persistent tamper-evident sealed-quarantine audit ledger JSON",
+    )
+    quarantine_audit.add_argument(
+        "--report",
+        default=None,
+        help="Optional atomic machine-readable quarantine audit JSON report",
+    )
 
     deployment_review = subparsers.add_parser(
         "deployment-review",
@@ -377,6 +411,25 @@ def _successful_status_report(report, provenance_report) -> dict:
     }
 
 
+def _successful_quarantine_audit_report(artifact, research, snapshot, result) -> dict:
+    return {
+        "schema_version": 1,
+        "status": "ok",
+        "audit_id": str(result.record.audit_id),
+        "strategy_id": str(artifact.strategy_id),
+        "artifact_id": str(artifact.artifact_id),
+        "experiment_id": str(artifact.experiment_id),
+        "research_cycle_id": str(research.research_cycle_id),
+        "dataset_fingerprint": str(snapshot.manifest.dataset_fingerprint),
+        "quarantine_id": str(result.manifest.quarantine_id),
+        "quarantine_start": str(result.manifest.start),
+        "score": float(result.record.score),
+        "passed": bool(result.record.passed),
+        "reasons": list(result.record.reasons),
+        "broker_execution_available": False,
+    }
+
+
 def _successful_deployment_review_report(artifact, research, audit, paper_report, provenance_report, review) -> dict:
     if bool(getattr(review, "broker_execution_available", False)):
         raise ValueError("deployment review may not enable broker execution")
@@ -500,6 +553,65 @@ def run_from_args(args: argparse.Namespace) -> int:
         with exclusive_shadow_command_lock(lock_path):
             return _run_locked_shadow_command(args)
 
+    if args.command == "quarantine-audit":
+        artifact = load_frozen_shadow_artifact(args.artifact)
+        research = verify_research_evidence_bundle(
+            args.research_run,
+            artifact_manifest=artifact,
+        )
+        if research.quarantine_start is None:
+            raise ValueError("quarantine audit requires sealed research quarantine boundary")
+        if not bool(research.research_ready):
+            raise ValueError("quarantine audit requires research-ready frozen champion")
+        if research.data_grade is not DataGrade.RESEARCH_GRADE:
+            raise ValueError("quarantine audit requires verified RESEARCH_GRADE data")
+
+        snapshot = SnapshotStore(args.snapshot_root).find_verified_by_fingerprint(
+            research.dataset_fingerprint
+        )
+        if snapshot is None:
+            raise ValueError("verified research snapshot not found for quarantine audit")
+        artifact_symbols = tuple(sorted(str(value).upper() for value in artifact.symbols))
+        if tuple(snapshot.manifest.symbols) != artifact_symbols:
+            raise ValueError("research snapshot universe does not match frozen artifact universe")
+
+        spec = FrozenStrategySpec(
+            strategy_id=str(artifact.strategy_id),
+            experiment_id=str(artifact.experiment_id),
+            horizon=int(artifact.horizon),
+            model_name=str(artifact.model_name),
+            model_params=dict(artifact.model_params),
+            seed=int(artifact.seed),
+            top_fraction=float(artifact.top_fraction),
+            weighting=str(artifact.weighting),
+        )
+        quarantine_config = QuarantineConfig(
+            start=research.quarantine_start,
+            min_development_periods=1,
+            min_quarantine_periods=1,
+        )
+        result = run_single_quarantine_audit(
+            snapshot.bars,
+            quarantine_config,
+            spec,
+            ledger_path=args.audit_ledger,
+            research_cycle_id=research.research_cycle_id,
+        )
+        if args.report:
+            _write_json_atomic(
+                args.report,
+                _successful_quarantine_audit_report(artifact, research, snapshot, result),
+            )
+        print(f"quarantine_audit_id={result.record.audit_id}")
+        print(f"strategy_id={artifact.strategy_id}")
+        print(f"experiment_id={artifact.experiment_id}")
+        print(f"research_cycle_id={research.research_cycle_id}")
+        print(f"quarantine_id={result.manifest.quarantine_id}")
+        print(f"quarantine_audit_passed={'yes' if result.record.passed else 'no'}")
+        print("reasons=" + (",".join(result.record.reasons) if result.record.reasons else "none"))
+        print("broker_execution=disabled")
+        return 0
+
     if args.command == "status":
         records = ledger.records(strategy_id=args.strategy_id)
         if not records:
@@ -621,6 +733,17 @@ def main(argv=None) -> int:
                     "schema_version": 1,
                     "status": "error",
                     "provider": args.provider,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                    "broker_execution_available": False,
+                },
+            )
+        if args.command == "quarantine-audit" and getattr(args, "report", None):
+            _write_json_atomic(
+                args.report,
+                {
+                    "schema_version": 1,
+                    "status": "error",
                     "error_type": type(exc).__name__,
                     "error": str(exc),
                     "broker_execution_available": False,
