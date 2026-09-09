@@ -243,3 +243,30 @@ def test_research_evidence_bundle_is_bound_to_frozen_artifact(tmp_path):
             run_dir,
             artifact_manifest=artifact,
         )
+
+
+def test_deployment_gate_accepts_verified_persisted_quarantine_record():
+    paper = SimpleNamespace(live_eligible=True, frozen_provenance_complete=True)
+    provenance = _verified_provenance()
+    audit_record = SimpleNamespace(passed=True)
+
+    report = evaluate_deployment_evidence(
+        research_ready=True,
+        data_grade=DataGrade.RESEARCH_GRADE,
+        quarantine_audit=None,
+        quarantine_audit_record=audit_record,
+        paper_report=paper,
+        paper_provenance_report=provenance,
+    )
+    assert report.quarantine_audit_passed
+    assert report.eligible_for_manual_live_review
+
+    with pytest.raises(ValueError, match="one quarantine audit"):
+        evaluate_deployment_evidence(
+            research_ready=True,
+            data_grade=DataGrade.RESEARCH_GRADE,
+            quarantine_audit=SimpleNamespace(holdout_report=SimpleNamespace(passed=True)),
+            quarantine_audit_record=audit_record,
+            paper_report=paper,
+            paper_provenance_report=provenance,
+        )
