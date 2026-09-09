@@ -163,3 +163,72 @@ def test_factory_cli_does_not_freeze_when_no_champion_exists(tmp_path, monkeypat
     assert called == []
     output = capsys.readouterr().out
     assert "shadow_freeze=skipped_no_champion" in output
+
+
+def test_factory_cli_excludes_sealed_quarantine_from_shadow_freeze(tmp_path, monkeypatch):
+    dates = pd.date_range("2026-01-01", periods=6, freq="D", tz="UTC")
+    bars = pd.DataFrame(
+        {
+            "timestamp": [date for date in dates for _ in (0, 1)],
+            "symbol": [symbol for _ in dates for symbol in ("AAA", "BBB")],
+            "fixture": range(12),
+        }
+    )
+    snapshot = SimpleNamespace(
+        snapshot_id="snapshot-quarantine-freeze",
+        path=tmp_path / "snapshot-quarantine-freeze",
+        bars=bars,
+        manifest=SimpleNamespace(
+            provider="fixture",
+            grade=DataGrade.BOOTSTRAP,
+            symbols=("AAA", "BBB"),
+            row_count=len(bars),
+            dataset_fingerprint="dataset-quarantine-freeze",
+        ),
+    )
+    candidate = _candidate()
+    captured = {}
+
+    monkeypatch.setattr(market_cli, "download_market_snapshot", lambda *args, **kwargs: snapshot)
+    monkeypatch.setattr(market_cli, "run_snapshot_factory", lambda *args, **kwargs: _report(candidate))
+    monkeypatch.setattr(
+        market_cli,
+        "_evaluate_factory_data_quality",
+        lambda *args, **kwargs: (
+            SimpleNamespace(research_grade_eligible=False, reasons=("fixture",)),
+            "quality-quarantine-freeze",
+            DataGrade.BOOTSTRAP,
+        ),
+    )
+
+    def fake_freeze(freeze_bars, spec, **kwargs):
+        captured["bars"] = freeze_bars.copy()
+        return SimpleNamespace(
+            artifact_id="artifact-quarantine-freeze",
+            strategy_id=spec.strategy_id,
+            broker_execution_available=False,
+        )
+
+    monkeypatch.setattr(market_cli, "freeze_shadow_strategy", fake_freeze, raising=False)
+
+    args = market_cli.build_parser().parse_args(
+        [
+            "--provider", "yahoo-bootstrap",
+            "--symbols", "AAA,BBB",
+            "--start", "2026-01-01",
+            "--end", "2026-01-06",
+            "--snapshot-root", str(tmp_path / "snapshots"),
+            "--factory",
+            "--factory-candidates", "1",
+            "--factory-workers", "1",
+            "--factory-quarantine-start", "2026-01-05",
+            "--factory-quarantine-min-development-periods", "2",
+            "--factory-quarantine-min-periods", "2",
+            "--factory-freeze-shadow-dir", str(tmp_path / "artifact"),
+        ]
+    )
+
+    assert market_cli.run_from_args(args) == 0
+    frozen_timestamps = pd.to_datetime(captured["bars"]["timestamp"], utc=True)
+    assert frozen_timestamps.max() < pd.Timestamp("2026-01-05T00:00:00Z")
+    assert len(captured["bars"]) == 8
