@@ -328,11 +328,18 @@ def evaluate_bound_deployment_review(
 
     audit_strategy = _required_lineage_value(quarantine_audit_record, "strategy_id", "audit strategy")
     audit_experiment = _required_lineage_value(quarantine_audit_record, "experiment_id", "audit experiment")
+    audit_cycle = _required_lineage_value(
+        quarantine_audit_record,
+        "research_cycle_id",
+        "audit research cycle",
+    )
     audit_start = _required_lineage_value(quarantine_audit_record, "quarantine_start", "audit quarantine boundary")
     if audit_strategy != artifact_strategy:
         raise ValueError("audit strategy does not match frozen artifact strategy")
     if audit_experiment != artifact_experiment:
         raise ValueError("audit experiment does not match frozen artifact experiment")
+    if audit_cycle != research_evidence.research_cycle_id:
+        raise ValueError("audit research cycle does not match verified research cycle")
     if audit_start != research_evidence.quarantine_start:
         raise ValueError("audit quarantine boundary does not match research quarantine boundary")
 
