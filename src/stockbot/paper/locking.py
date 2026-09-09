@@ -26,6 +26,12 @@ def shadow_command_lock_path(state_path: str | Path, explicit_lock: str | Path |
     return Path(str(Path(state_path)) + ".lock")
 
 
+def paper_ledger_write_lock_path(ledger_path: str | Path) -> Path:
+    """Return the per-ledger writer lock path."""
+
+    return Path(str(Path(ledger_path)) + ".lock")
+
+
 def _write_owner_metadata(handle: TextIO) -> None:
     handle.seek(0)
     handle.truncate()
@@ -43,17 +49,14 @@ def _write_owner_metadata(handle: TextIO) -> None:
     os.fsync(handle.fileno())
 
 
-@contextmanager
-def exclusive_shadow_command_lock(path: str | Path) -> Iterator[None]:
-    """Acquire a non-blocking process lock for one shadow command critical section.
-
-    The operating system owns lock lifetime, so abnormal process termination releases
-    the advisory lock automatically. The lock file itself is intentionally persistent;
-    file existence is not interpreted as lock ownership.
-    """
-
+def _acquire_exclusive_lock(
+    path: str | Path,
+    *,
+    unavailable_message: str,
+    busy_message: str,
+) -> Iterator[None]:
     if fcntl is None:
-        raise ValueError("shadow command locking requires POSIX fcntl support")
+        raise ValueError(unavailable_message)
 
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -64,7 +67,7 @@ def exclusive_shadow_command_lock(path: str | Path) -> Iterator[None]:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             acquired = True
         except BlockingIOError as exc:
-            raise ValueError("another shadow command is already running for this state") from exc
+            raise ValueError(busy_message) from exc
         _write_owner_metadata(handle)
         yield
     finally:
@@ -75,3 +78,34 @@ def exclusive_shadow_command_lock(path: str | Path) -> Iterator[None]:
                 handle.close()
         else:
             handle.close()
+
+
+@contextmanager
+def exclusive_shadow_command_lock(path: str | Path) -> Iterator[None]:
+    """Acquire a non-blocking process lock for one shadow command critical section.
+
+    The operating system owns lock lifetime, so abnormal process termination releases
+    the advisory lock automatically. The lock file itself is intentionally persistent;
+    file existence is not interpreted as lock ownership.
+    """
+
+    yield from _acquire_exclusive_lock(
+        path,
+        unavailable_message="shadow command locking requires POSIX fcntl support",
+        busy_message="another shadow command is already running for this state",
+    )
+
+
+@contextmanager
+def exclusive_paper_ledger_write_lock(path: str | Path) -> Iterator[None]:
+    """Serialize verify-and-append operations for one paper ledger.
+
+    Reads remain lock-free and integrity-verifying. The OS releases the writer lock on
+    process termination, so a crash cannot leave a stale ownership marker behind.
+    """
+
+    yield from _acquire_exclusive_lock(
+        path,
+        unavailable_message="paper ledger writer locking requires POSIX fcntl support",
+        busy_message="paper ledger is already being written",
+    )
