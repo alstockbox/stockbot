@@ -139,6 +139,8 @@ def _load_ledger(path: str | Path) -> list[QuarantineAuditRecord]:
     for item in payload:
         if not isinstance(item, dict):
             raise ValueError("quarantine audit integrity violation: audit record must be an object")
+        if type(item.get("passed")) is not bool:
+            raise ValueError("quarantine audit integrity violation: audit passed must be boolean")
         try:
             record = QuarantineAuditRecord(
                 **{
