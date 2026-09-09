@@ -23,6 +23,7 @@ from stockbot.data.research_quality import (
 )
 from stockbot.data.snapshots import SnapshotStore
 from stockbot.research.deep_diagnostics import compact_deep_diagnostics
+from stockbot.research.deep_feedback import build_research_cycle_id
 from stockbot.research.factory import ResearchFactoryConfig
 from stockbot.research.jobs import make_job_manifest, make_run_summary, write_json_payload, write_json_record
 from stockbot.research.liquidity_execution import LiquidityExecutionConfig
@@ -56,6 +57,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--factory-workers", type=int, default=4, help="Parallel challenger workers used by V2")
     parser.add_argument("--factory-memory", default="research_memory/experiments.jsonl", help="Append-only research-memory JSONL path")
     parser.add_argument("--factory-run-dir", default=None, help="Optional directory for scheduler-friendly job manifest and research artifacts")
+    parser.add_argument(
+        "--factory-deep-feedback-weight",
+        type=float,
+        default=0.25,
+        help=(
+            "Bounded weight used only to rank mutation parents from earlier deep-research cycles; "
+            "does not change gates, holdout scores, promotion scores or champion eligibility"
+        ),
+    )
     parser.add_argument(
         "--factory-auxiliary-input",
         default=None,
@@ -259,6 +269,8 @@ def run_from_args(args: argparse.Namespace) -> int:
             raise ValueError("factory auxiliary max age days cannot be negative")
         if not 0.0 < args.factory_auxiliary_min_coverage <= 1.0:
             raise ValueError("factory auxiliary minimum coverage must be in (0,1]")
+        if not 0.0 <= args.factory_deep_feedback_weight <= 1.0:
+            raise ValueError("factory deep feedback weight must be in [0,1]")
         if auxiliary_feature_names is not None and not args.factory_auxiliary_input:
             raise ValueError("factory auxiliary features require --factory-auxiliary-input")
 
@@ -302,6 +314,20 @@ def run_from_args(args: argparse.Namespace) -> int:
                 else auxiliary_feature_names
             )
         )
+        auxiliary_fingerprint = None if auxiliary_store is None else auxiliary_store.fingerprint
+        universe_fingerprint = (
+            None if point_in_time_universe is None else point_in_time_universe.fingerprint
+        )
+        quarantine_start = None if quarantine_config is None else quarantine_config.start
+        research_cycle_id = build_research_cycle_id(
+            dataset_fingerprint=manifest.dataset_fingerprint,
+            quarantine_start=quarantine_start,
+            universe_fingerprint=universe_fingerprint,
+            auxiliary_fingerprint=auxiliary_fingerprint,
+            quality_fingerprint=quality_fingerprint,
+        )
+        deep_feedback_path = Path(args.factory_memory).with_name("deep-findings.jsonl")
+
         config = ResearchFactoryConfig(
             horizons=horizons,
             population=ModelPopulationConfig(max_candidates=args.factory_candidates),
@@ -314,12 +340,10 @@ def run_from_args(args: argparse.Namespace) -> int:
             max_candidates=args.factory_candidates,
             max_workers=args.factory_workers,
             memory_path=args.factory_memory,
-            quarantine_start=(None if quarantine_config is None else quarantine_config.start),
-            auxiliary_fingerprint=(None if auxiliary_store is None else auxiliary_store.fingerprint),
+            quarantine_start=quarantine_start,
+            auxiliary_fingerprint=auxiliary_fingerprint,
             auxiliary_features=selected_auxiliary_names,
-            universe_fingerprint=(
-                None if point_in_time_universe is None else point_in_time_universe.fingerprint
-            ),
+            universe_fingerprint=universe_fingerprint,
             quality_fingerprint=quality_fingerprint,
         )
         run_dir = None
@@ -336,6 +360,9 @@ def run_from_args(args: argparse.Namespace) -> int:
             snapshot,
             config=config,
             memory_path=args.factory_memory,
+            deep_feedback_path=deep_feedback_path,
+            research_cycle_id=research_cycle_id,
+            deep_feedback_weight=args.factory_deep_feedback_weight,
             quarantine_config=quarantine_config,
             quarantine_manifest_path=quarantine_manifest_path,
             quality_report=quality_report,
@@ -378,6 +405,8 @@ def run_from_args(args: argparse.Namespace) -> int:
                 test_periods=args.factory_diagnostic_test_periods,
                 liquidity_config=liquidity_config,
                 capacity_levels=capital_levels,
+                deep_feedback_path=deep_feedback_path,
+                research_cycle_id=research_cycle_id,
                 quarantine_config=quarantine_config,
                 quarantine_manifest_path=quarantine_manifest_path,
                 quality_report=quality_report,
@@ -401,6 +430,9 @@ def run_from_args(args: argparse.Namespace) -> int:
 
         print("research_factory:")
         print(f"  job_id={job_manifest.job_id}")
+        print(f"  research_cycle_id={research_cycle_id}")
+        print(f"  deep_feedback_path={deep_feedback_path}")
+        print(f"  deep_feedback_weight={args.factory_deep_feedback_weight:.3f}")
         print(f"  experiments_run={report.experiments_run}")
         print(f"  promotion_candidates={report.candidates_passed}")
         print(f"  holdout_evaluated={report.holdout_evaluated}")
