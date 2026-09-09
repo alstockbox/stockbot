@@ -27,6 +27,19 @@ def _verified_provenance(**overrides):
     return SimpleNamespace(**payload)
 
 
+def _readiness_fingerprint(summary_payload):
+    payload = {
+        "ready": bool(summary_payload["champion_paper_ready"]),
+        "score": float(summary_payload["champion_paper_readiness_score"]),
+        "reasons": [
+            str(value)
+            for value in summary_payload.get("champion_paper_readiness_reasons", [])
+        ],
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
 def _write_research_bundle(tmp_path):
     run_dir = tmp_path / "run"
     run_dir.mkdir()
@@ -144,6 +157,7 @@ def _write_research_bundle(tmp_path):
         experiment_id="experiment-a",
         research_cycle_id=research_cycle_id,
         source_dataset_fingerprint=dataset_fingerprint,
+        research_readiness_fingerprint=_readiness_fingerprint(summary_payload),
     )
     return run_dir, artifact
 
@@ -239,6 +253,27 @@ def test_research_evidence_bundle_is_bound_to_frozen_artifact(tmp_path):
     summary["champion_experiment_id"] = "different-experiment"
     summary_path.write_text(json.dumps(summary, sort_keys=True, indent=2), encoding="utf-8")
     with pytest.raises(ValueError, match="experiment"):
+        deployment_gate_module.verify_research_evidence_bundle(
+            run_dir,
+            artifact_manifest=artifact,
+        )
+
+
+def test_research_evidence_rejects_tampered_readiness_claim(tmp_path):
+    run_dir, artifact = _write_research_bundle(tmp_path)
+
+    evidence = deployment_gate_module.verify_research_evidence_bundle(
+        run_dir,
+        artifact_manifest=artifact,
+    )
+    assert evidence.research_ready is True
+
+    summary_path = run_dir / "summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["champion_paper_readiness_score"] = 0.12
+    summary_path.write_text(json.dumps(summary, sort_keys=True, indent=2), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="readiness"):
         deployment_gate_module.verify_research_evidence_bundle(
             run_dir,
             artifact_manifest=artifact,
