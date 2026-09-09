@@ -135,6 +135,15 @@ def test_paper_status_requires_verified_frozen_provenance(monkeypatch, tmp_path,
             model_artifact_id="artifact-status",
             research_cycle_id="cycle-status",
             broker_execution_available=False,
+            artifact_verified=True,
+            model_hash_verified=True,
+            artifact_strategy_match=True,
+            artifact_cycle_match=True,
+            signal_snapshots_verified=1,
+            realization_snapshots_verified=1,
+            snapshot_timeline_verified=True,
+            observations_verified=1,
+            reasons=(),
         )
 
     monkeypatch.setattr(paper_cli, "PaperTradingLedger", FakeLedger)
@@ -182,6 +191,15 @@ def test_paper_status_requires_verified_frozen_provenance(monkeypatch, tmp_path,
     assert payload["external_provenance_verified"] is True
     assert payload["verified_snapshots"] == 2
     assert payload["snapshot_fingerprints"] == ["snapshot-a", "snapshot-b"]
+    assert payload["artifact_verified"] is True
+    assert payload["model_hash_verified"] is True
+    assert payload["artifact_strategy_match"] is True
+    assert payload["artifact_cycle_match"] is True
+    assert payload["signal_snapshots_verified"] == 1
+    assert payload["realization_snapshots_verified"] == 1
+    assert payload["snapshot_timeline_verified"] is True
+    assert payload["observations_verified"] == 1
+    assert payload["provenance_reasons"] == []
     assert payload["model_artifact_id"] == "artifact-status"
     assert payload["research_cycle_id"] == "cycle-status"
     assert payload["live_evidence_eligible"] is False
