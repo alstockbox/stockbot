@@ -2,9 +2,9 @@
 
 StockBot is a research-first quantitative AI trading engine.
 
-V0 is deliberately **paper/research only**. It contains causal features, transparent baseline strategies,
+The project remains deliberately **paper/research only**. It contains causal features, transparent baseline strategies,
 market-regime detection, portfolio sizing, hard risk gates, cost-aware backtesting, deterministic ML
-challengers, champion/challenger scoring, and a structured AI/LLM research loop.
+challengers, champion/challenger scoring, point-in-time research inputs, sealed evidence boundaries and a structured AI/ML research loop.
 
 It does **not** contain live broker order execution.
 
@@ -18,11 +18,11 @@ python scripts/run_demo.py
 
 ## Core principle
 
-The system optimizes for repeatable out-of-sample edge after costs, not impressive in-sample P&L.
-Machine learning and LLMs are research/challenger layers. The risk engine is authoritative and cannot
-be bypassed.
+The system optimizes for repeatable out-of-sample edge after realistic costs, liquidity, market impact and risk constraints, not impressive in-sample P&L.
+Machine learning and LLMs are research/challenger layers. The hard risk engine is authoritative and cannot
+be bypassed by a model, an ensemble, an LLM or a research-memory signal.
 
-See `docs/superpowers/specs/2026-09-02-stockbot-core-design.md` for the architecture.
+See `docs/superpowers/specs/2026-09-02-stockbot-core-design.md` for the original architecture.
 
 ## V1: multi-symbol ML training
 
@@ -34,7 +34,7 @@ Run the deterministic training demo:
 python scripts/run_training_demo.py
 ```
 
-The bundled demo dataset is explicitly `DEMO / NON-RESEARCH-GRADE`. A model can rank first on demo data, but the promotion gate will not treat it as a valid champion candidate. Research-grade promotion requires a dataset explicitly marked `DataGrade.RESEARCH_GRADE` and still must pass OOS coverage, robustness, drawdown, turnover and score gates.
+The bundled demo dataset is explicitly `DEMO / NON-RESEARCH-GRADE`. A model can rank first on demo data, but the promotion gate will not treat it as a valid champion candidate. Research-grade promotion requires verified research-grade evidence and still must pass OOS coverage, robustness, drawdown, turnover and score gates.
 
 ### V1 model families
 
@@ -126,9 +126,11 @@ V2 is intentionally **not** trained against a fixed weekly-return target. Search
 
 ## V2.1: self-improving research farm
 
-V2.1 adds another evidence layer between raw model search and extended paper trading. The default selection funnel is now:
+V2.1 adds another evidence layer between raw model search and extended paper trading. The research funnel now combines:
 
-`broad/evolutionary population -> purged OOS -> cost-aware metrics -> adversarial stress -> regime evaluation -> FDR control -> drift check -> blind holdout -> paper readiness -> horizon champions -> meta-ensemble`
+`broad/evolutionary population -> purged OOS -> realistic costs -> adversarial stress -> regime evaluation -> FDR control -> drift checks -> internal blind holdout -> holdout-safe Deep Research -> sealed quarantine single audit -> forward paper arena -> manual live review`
+
+Deep Research is invoked after the factory report exists, but its expensive diagnostics replay only the pre-holdout research partition. The internal blind holdout and the later sealed quarantine are not optimization datasets.
 
 ### Statistical false-discovery control
 
@@ -156,11 +158,11 @@ Regime specialists and the router remain diagnostics. They do not bypass the glo
 
 ### Evolutionary challenger generation
 
-Research memory is now used as an input to future snapshot runs. A bounded portion of the next population is created by mutating parameters around historically strong research-gate winners, while the remaining population continues broad model-family exploration. This gives the search loop an explore/exploit mechanism instead of restarting from exactly the same static grid every run.
+Research memory is used as an input to future snapshot runs. A bounded portion of the next population is created by mutating parameters around historically strong research-gate winners, while the remaining population continues broad model-family exploration. This gives the search loop an explore/exploit mechanism instead of restarting from exactly the same static grid every run.
 
 ### Drift and paper-readiness
 
-Recent OOS behavior is compared with each model's earlier OOS history using mean-return shift, volatility expansion, Sharpe degradation and drawdown degradation. A final paper-readiness report combines OOS coverage, robustness, stress survival, regime robustness, FDR confidence, drift stability and blind-holdout evidence. By default, a model is not eligible for champion promotion unless the evidence chain is complete.
+Recent OOS behavior is compared with each model's earlier OOS history using mean-return shift, volatility expansion, Sharpe degradation and drawdown degradation. A paper-readiness report combines OOS coverage, robustness, stress survival, regime robustness, FDR confidence, drift stability and blind-holdout evidence. Paper-readiness is evidence, not permission to place orders.
 
 ### Scheduler-friendly 24/7 research jobs
 
@@ -179,11 +181,11 @@ python scripts/run_market_training.py \
   --factory-regime-specialists
 ```
 
-Each run can write `job.json` before research begins and `summary.json` after it completes. Job identity binds the market snapshot, sealed-quarantine boundary, point-in-time auxiliary-data fingerprint, selected auxiliary features and historical-universe fingerprint. The summary includes experiment counts, promotion status, active champion, horizon-ensemble score and optional regime-specialist/router scores. This is intended as the persistence contract for a future scheduler/queue rather than as a live execution service.
+Each run can write `job.json` before research begins and `summary.json` after it completes. Job identity binds the market snapshot, sealed-quarantine boundary, point-in-time auxiliary-data fingerprint, selected auxiliary features, historical-universe fingerprint and data-quality fingerprint. The summary includes experiment counts, promotion status, active champion, horizon-ensemble score and optional regime-specialist/router scores. This is the persistence contract for a scheduler/queue, not a live execution service.
 
 ## V2.2: deep diagnostics and point-in-time external signals
 
-The research stack can now retain and replay the exact feature contract used by each candidate. Expensive diagnostics are restricted to the pre-holdout research partition and include policy search, moving-block bootstrap uncertainty, factor attribution, liquidity/market-impact simulation, capital-capacity curves, multi-window robustness, feature-group ablation, OOS stacking and optional point-in-time sector/factor neutralization.
+The research stack retains and replays the exact feature contract used by each candidate. Expensive diagnostics are restricted to the pre-holdout research partition and include policy search, moving-block bootstrap uncertainty, factor attribution, liquidity/market-impact simulation, capital-capacity curves, multi-window robustness, feature-group ablation, OOS stacking, point-in-time sector/factor neutralization and a point-in-time sector-cap challenger.
 
 External fundamentals, macro, news, sentiment, short-interest, insider and alternative-data signals enter through `PointInTimeFeatureStore`. Every observation requires both an economic/event `observation_time` and the earliest strategy-usable `available_time`. Missing publication timing is rejected rather than guessed. Research-input files are fingerprinted and verified on reload, so changed revisions create a different research identity.
 
@@ -217,4 +219,84 @@ python scripts/run_market_training.py \
 
 When a candidate actually uses `aux__*` features, Deep Research additionally runs auxiliary ablation: full external-signal stack versus no external data and per-feature leave-one-out tests. These diagnostics report aggregate external-data contribution, useful features and potentially harmful features. They remain diagnostics and do not replace blind holdout, sealed quarantine or forward paper evidence.
 
-No backtest, model score, statistical test, paper-readiness status, champion status or auxiliary-data result guarantees future returns.
+## V2.3: sealed evidence chain and future-cycle Deep Findings
+
+### Fail-closed research-grade data
+
+A declared `RESEARCH_GRADE` label is not trusted by itself. `ResearchDataQualityReport` verifies observable adjusted-market-data quality, retrieval-time causality, provider/corporate-action fields and point-in-time universe coverage. Explicit attestations are required for properties that cannot be inferred from columns alone, including adjusted-price verification and corporate-action completeness/point-in-time correctness.
+
+If the evidence is absent or fails, the effective grade is downgraded to `BOOTSTRAP`; a passing report never upgrades an already lower declared grade.
+
+`PointInTimeUniverse` stores historical membership intervals plus optional exchange, sector, industry and delisting metadata. Research-grade universe evidence requires point-in-time membership semantics, survivorship-bias control and delisted-security coverage.
+
+### Sector exposure controls
+
+Deep Research can measure point-in-time sector exposure, evaluate factor/sector neutralization and test an execution-aware sector-cap challenger. Sector constraints are diagnostics/challengers: they do not retroactively change the blind holdout and cannot override the hard risk engine.
+
+Compact deep-diagnostic JSON retains score/Sharpe/CAGR/stress and sector concentration before/after, while omitting heavy OOS return streams and full weight matrices.
+
+### Sealed quarantine and single audit
+
+The final quarantine boundary is an explicit fixed date. It does not silently roll forward with the newest data. Future observations at or after that date remain quarantined until a new research cycle is explicitly created.
+
+Routine factory, specialist and deep-diagnostic jobs operate on development data only. The quarantine audit permits one frozen strategy specification per sealed research cycle and records the result in an append-only ledger. Re-testing variants against the same quarantine is rejected so the quarantine cannot turn into another hyperparameter leaderboard.
+
+### Forward paper arena and deployment evidence
+
+The paper ledger is append-only and the paper arena evaluates forward sessions, calendar span, excess performance, turnover, cost rate, fill quality, stress, drift and moving-block-bootstrap confidence.
+
+A deployment-evidence gate can require all of the following:
+
+1. research readiness;
+2. verified `RESEARCH_GRADE` evidence;
+3. a passed sealed-quarantine audit;
+4. sufficient forward paper evidence.
+
+Even if all conditions pass, the result is only **eligible for manual live review**. `hard_risk_engine_required=True` and `broker_execution_available=False`; StockBot still cannot submit a live order.
+
+### Deep Findings: learning without same-cycle leakage
+
+Deep Research compacts development-only diagnostics into append-only `DeepResearchFinding` records. Findings capture bounded signals such as bootstrap confidence, idiosyncratic factor score, capacity score and multi-window robustness, plus descriptive policy/ablation/sector findings.
+
+A deterministic `research_cycle_id` is derived from data identity:
+
+- market dataset fingerprint;
+- sealed-quarantine start;
+- point-in-time universe fingerprint;
+- auxiliary feature-store fingerprint;
+- research data-quality fingerprint.
+
+Execution knobs such as worker count or candidate budget are deliberately excluded. Re-running the same underlying evidence is therefore the **same cycle**.
+
+Deep Findings from the current cycle are ignored when ranking mutation parents. Only findings from earlier data cycles may provide a bounded bonus to future exploration allocation. They never modify research gates, factory score, blind-holdout score, promotion score or champion eligibility.
+
+The CLI stores Deep Findings beside experiment memory as `deep-findings.jsonl` and prints both `research_cycle_id` and `deep_feedback_path`. The feedback strength is bounded by `--factory-deep-feedback-weight` in `[0,1]`.
+
+Example research cycle:
+
+```bash
+python scripts/run_market_training.py \
+  --provider tiingo \
+  --symbols AAPL,MSFT,NVDA,AMZN,META,GOOGL,SPY,QQQ \
+  --start 2014-01-01 \
+  --end 2026-09-01 \
+  --snapshot-root snapshots \
+  --factory \
+  --factory-memory research_memory/experiments.jsonl \
+  --factory-run-dir research_runs \
+  --factory-universe-input research_inputs/universe.json \
+  --factory-attest-adjusted-prices-verified \
+  --factory-attest-corporate-actions-complete \
+  --factory-attest-corporate-actions-point-in-time \
+  --factory-quarantine-start 2026-01-02 \
+  --factory-deep-diagnostics \
+  --factory-deep-feedback-weight 0.25
+```
+
+The attestations above are evidence declarations, not a way to manufacture research-grade status: observable data/universe checks still fail closed and the declared snapshot grade is never automatically upgraded.
+
+## Safety boundary
+
+No backtest, model score, statistical test, paper-readiness status, champion status, auxiliary-data result, quarantine result or paper-arena result guarantees future returns.
+
+StockBot currently provides research, backtesting, diagnostics, sealed evaluation and paper/shadow evidence only. There is **no live broker execution route** in this repository.
