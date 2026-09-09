@@ -138,6 +138,32 @@ def test_quarantine_audit_rejects_tampered_persisted_result(tmp_path):
         )
 
 
+def test_verified_quarantine_audit_rejects_non_boolean_passed_even_when_hash_coercion_matches(tmp_path):
+    bars = _bars()
+    quarantine = _quarantine()
+    spec = freeze_strategy_spec(_candidate("candidate-a", 1.0), top_fraction=0.25, weighting="equal")
+    ledger = tmp_path / "audit-ledger.json"
+
+    result = run_single_quarantine_audit(
+        bars,
+        quarantine,
+        spec,
+        ledger_path=ledger,
+        holdout_config=_relaxed_holdout(),
+    )
+    payload = json.loads(ledger.read_text(encoding="utf-8"))
+    original_passed = payload[0]["passed"]
+    payload[0]["passed"] = "true" if original_passed else ""
+    ledger.write_text(json.dumps(payload, sort_keys=True, indent=2), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="audit integrity"):
+        quarantine_audit_module.load_verified_quarantine_audit_record(
+            ledger,
+            quarantine_start=result.manifest.start,
+            strategy_id=spec.strategy_id,
+        )
+
+
 def test_verified_quarantine_audit_lookup_requires_matching_cycle_and_strategy(tmp_path):
     bars = _bars()
     quarantine = _quarantine()
