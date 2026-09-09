@@ -89,6 +89,10 @@ def test_deep_diagnostics_never_pass_blind_holdout_rows_to_subresearch(monkeypat
         _assert_research_only(bars)
         return SimpleNamespace(neutralized_score=0.9)
 
+    def fake_sector_cap(bars, *args, **kwargs):
+        _assert_research_only(bars)
+        return SimpleNamespace(constrained_score=1.1, max_sector_weight=0.35)
+
     def fake_liquidity(bars, *args, **kwargs):
         _assert_research_only(bars)
         return SimpleNamespace(score=0.7)
@@ -116,6 +120,7 @@ def test_deep_diagnostics_never_pass_blind_holdout_rows_to_subresearch(monkeypat
     monkeypatch.setattr("stockbot.research.deep_diagnostics.evaluate_block_bootstrap_uncertainty", fake_bootstrap)
     monkeypatch.setattr("stockbot.research.deep_diagnostics.evaluate_factor_exposure", fake_factor_exposure)
     monkeypatch.setattr("stockbot.research.deep_diagnostics.evaluate_sector_factor_neutralization", fake_neutralization)
+    monkeypatch.setattr("stockbot.research.deep_diagnostics.evaluate_sector_cap_challenger", fake_sector_cap)
     monkeypatch.setattr("stockbot.research.deep_diagnostics.simulate_liquidity_aware_execution", fake_liquidity)
     monkeypatch.setattr("stockbot.research.deep_diagnostics.evaluate_capacity_curve", fake_capacity)
     monkeypatch.setattr("stockbot.research.deep_diagnostics.evaluate_training_window_robustness", fake_windows)
@@ -130,4 +135,5 @@ def test_deep_diagnostics_never_pass_blind_holdout_rows_to_subresearch(monkeypat
     )
 
     assert diagnostics.candidate_count == 1
-    assert len(seen_max_dates) == 7
+    assert diagnostics.candidates["candidate-1"].sector_cap.constrained_score == 1.1
+    assert len(seen_max_dates) == 8
