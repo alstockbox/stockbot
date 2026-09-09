@@ -91,3 +91,51 @@ def test_paper_cli_steps_verified_snapshot_through_frozen_runner(tmp_path, monke
     assert "shadow_strategy_id=strategy-shadow" in output
     assert "paper_net_return=0.001200" in output
     assert "broker_execution=disabled" in output
+
+
+def test_paper_status_requires_frozen_provenance(monkeypatch, tmp_path, capsys):
+    captured = {}
+    records = [SimpleNamespace(strategy_id="strategy-status")]
+
+    class FakeLedger:
+        def __init__(self, path):
+            captured["ledger_path"] = path
+
+        def records(self, *, strategy_id=None):
+            captured["strategy_id"] = strategy_id
+            return records
+
+    def fake_evaluate(rows, *, criteria):
+        captured["criteria"] = criteria
+        assert rows is records
+        return SimpleNamespace(
+            strategy_id="strategy-status",
+            sessions=1,
+            live_span_days=0,
+            metrics={"sharpe": 0.0, "cagr": 0.0, "max_drawdown": 0.0},
+            excess_cagr=0.0,
+            average_fill_rate=1.0,
+            evidence_score=0.0,
+            live_eligible=False,
+            frozen_provenance_complete=False,
+            reasons=("paper_frozen_provenance",),
+        )
+
+    monkeypatch.setattr(paper_cli, "PaperTradingLedger", FakeLedger)
+    monkeypatch.setattr(paper_cli, "evaluate_paper_track", fake_evaluate)
+
+    args = build_parser().parse_args(
+        [
+            "--ledger", str(tmp_path / "paper.jsonl"),
+            "status",
+            "--strategy-id", "strategy-status",
+            "--min-sessions", "1",
+            "--min-span-days", "1",
+        ]
+    )
+
+    assert run_from_args(args) == 0
+    assert captured["criteria"].require_frozen_provenance is True
+    output = capsys.readouterr().out
+    assert "frozen_provenance_complete=no" in output
+    assert "live_evidence_eligible=no" in output
