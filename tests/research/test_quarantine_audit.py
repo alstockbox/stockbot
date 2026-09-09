@@ -197,3 +197,28 @@ def test_verified_quarantine_audit_rejects_tampered_audited_at(tmp_path):
             quarantine_start=result.manifest.start,
             strategy_id=spec.strategy_id,
         )
+
+
+def test_verified_quarantine_audit_rejects_duplicate_cycle_records(tmp_path):
+    bars = _bars()
+    quarantine = _quarantine()
+    spec = freeze_strategy_spec(_candidate("candidate-a", 1.0), top_fraction=0.25, weighting="equal")
+    ledger = tmp_path / "audit-ledger.json"
+
+    result = run_single_quarantine_audit(
+        bars,
+        quarantine,
+        spec,
+        ledger_path=ledger,
+        holdout_config=_relaxed_holdout(),
+    )
+    payload = json.loads(ledger.read_text(encoding="utf-8"))
+    payload.append(dict(payload[0]))
+    ledger.write_text(json.dumps(payload, sort_keys=True, indent=2), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="multiple.*audit"):
+        quarantine_audit_module.load_verified_quarantine_audit_record(
+            ledger,
+            quarantine_start=result.manifest.start,
+            strategy_id=spec.strategy_id,
+        )
