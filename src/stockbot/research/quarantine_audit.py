@@ -146,6 +146,19 @@ def _load_ledger(path: str | Path) -> list[QuarantineAuditRecord]:
             raise ValueError("quarantine audit integrity violation: audit score must be numeric")
         if not math.isfinite(float(item["score"])):
             raise ValueError("quarantine audit integrity violation: audit score must be finite")
+        raw_audited_at = item.get("audited_at")
+        if type(raw_audited_at) is not str:
+            raise ValueError("quarantine audit integrity violation: audit timestamp must be a string")
+        try:
+            audited_at = datetime.fromisoformat(raw_audited_at.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError(
+                "quarantine audit integrity violation: audit timestamp must be timezone-aware ISO-8601"
+            ) from exc
+        if audited_at.tzinfo is None or audited_at.utcoffset() is None:
+            raise ValueError(
+                "quarantine audit integrity violation: audit timestamp must be timezone-aware ISO-8601"
+            )
         try:
             record = QuarantineAuditRecord(
                 **{
