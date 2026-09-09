@@ -146,6 +146,18 @@ def test_deployment_review_cli_assembles_verified_evidence(tmp_path, monkeypatch
     assert payload["quarantine_audit_passed"] is True
     assert payload["paper_live_evidence_eligible"] is True
     assert payload["paper_external_provenance_verified"] is True
+    assert payload["external_provenance_verified"] is True
+    assert payload["artifact_verified"] is True
+    assert payload["model_hash_verified"] is True
+    assert payload["artifact_strategy_match"] is True
+    assert payload["artifact_cycle_match"] is True
+    assert payload["signal_snapshots_verified"] == 72
+    assert payload["realization_snapshots_verified"] == 72
+    assert payload["snapshot_timeline_verified"] is True
+    assert payload["observations_verified"] == 72
+    assert payload["verified_snapshots"] == 73
+    assert payload["snapshot_fingerprints"] == ["snapshot-a"]
+    assert payload["provenance_reasons"] == []
     assert payload["eligible_for_manual_live_review"] is True
     assert payload["hard_risk_engine_required"] is True
     assert payload["broker_execution_available"] is False
