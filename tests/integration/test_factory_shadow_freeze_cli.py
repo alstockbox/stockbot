@@ -1,3 +1,5 @@
+import hashlib
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -43,7 +45,11 @@ def _candidate():
         discovery=None,
         regime_report=None,
         drift_report=None,
-        paper_readiness=SimpleNamespace(ready=True),
+        paper_readiness=SimpleNamespace(
+            ready=True,
+            score=0.91,
+            reasons=(),
+        ),
         result=result,
     )
 
@@ -121,6 +127,18 @@ def test_factory_cli_auto_freezes_exact_champion_contract(tmp_path, monkeypatch,
     assert captured["kwargs"]["source_dataset_fingerprint"] == "dataset-shadow-freeze"
     assert captured["kwargs"]["output_dir"] == artifact_dir
     assert captured["kwargs"]["research_cycle_id"]
+    readiness_payload = {
+        "ready": True,
+        "score": 0.91,
+        "reasons": [],
+    }
+    readiness_raw = json.dumps(
+        readiness_payload,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    expected_readiness_fingerprint = hashlib.sha256(readiness_raw).hexdigest()
+    assert captured["kwargs"]["research_readiness_fingerprint"] == expected_readiness_fingerprint
     assert captured["kwargs"]["execution_config"].capital == 100_000.0
 
     output = capsys.readouterr().out
