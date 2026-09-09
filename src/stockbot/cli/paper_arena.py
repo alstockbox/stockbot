@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import json
 import os
 from pathlib import Path
 
@@ -86,6 +87,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Inclusive download end date; defaults to the current UTC calendar date",
     )
+    cycle.add_argument(
+        "--report",
+        default=None,
+        help="Optional atomic machine-readable JSON report for schedulers and monitoring",
+    )
 
     status = subparsers.add_parser("status", help="Evaluate accumulated forward paper evidence")
     status.add_argument("--strategy-id", required=True)
@@ -103,6 +109,14 @@ def resolve_shadow_provider(name: str):
             raise ProviderError("TIINGO_API_TOKEN is required for --provider tiingo")
         return TiingoProvider(token=token)
     raise ValueError(f"unsupported shadow provider: {name}")
+
+
+def _write_json_atomic(path: str | Path, payload: dict) -> None:
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_suffix(target.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(target)
 
 
 def _validate_shadow_args(args: argparse.Namespace):
@@ -168,9 +182,9 @@ def _select_latest_compatible_snapshot(snapshot_root: str | Path, artifact_symbo
     return max(compatible, key=lambda item: (item[0], item[1], item[2]))[3]
 
 
-def _run_shadow_snapshot(args: argparse.Namespace, snapshot) -> int:
+def _execute_shadow_snapshot(args: argparse.Namespace, snapshot):
     auxiliary_names, auxiliary_store = _validate_shadow_args(args)
-    result = run_shadow_step(
+    return run_shadow_step(
         snapshot.bars,
         artifact_dir=args.artifact,
         state_path=args.state,
@@ -183,20 +197,63 @@ def _run_shadow_snapshot(args: argparse.Namespace, snapshot) -> int:
         auxiliary_max_age_days=args.auxiliary_max_age_days,
         auxiliary_min_coverage=args.auxiliary_min_coverage,
     )
+
+
+def _print_shadow_result(result) -> None:
     print(f"shadow_strategy_id={result.strategy_id}")
     print(f"shadow_artifact_id={result.artifact_id}")
     print(f"processed_timestamp={result.processed_timestamp}")
     print(f"pending_signal_timestamp={result.pending_signal_timestamp}")
     print(f"target_count={sum(abs(float(value)) > 1e-12 for value in result.target_weights.values())}")
     if result.observation is None:
-        print("paper_observation=pending_or_idempotent")
+        print("paper_observation=idempotent" if result.idempotent_replay else "paper_observation=pending")
     else:
         print(f"paper_observation={result.observation.timestamp}")
-        print(f"paper_net_return={result.observation.net_return:.6f}")
-        print(f"paper_fill_rate={result.observation.fill_rate:.6f}")
-        print(f"paper_cost_rate={result.observation.cost_rate:.6f}")
+        if hasattr(result.observation, "net_return"):
+            print(f"paper_net_return={result.observation.net_return:.6f}")
+        if hasattr(result.observation, "fill_rate"):
+            print(f"paper_fill_rate={result.observation.fill_rate:.6f}")
+        if hasattr(result.observation, "cost_rate"):
+            print(f"paper_cost_rate={result.observation.cost_rate:.6f}")
     print("broker_execution=disabled")
+
+
+def _run_shadow_snapshot(args: argparse.Namespace, snapshot) -> int:
+    result = _execute_shadow_snapshot(args, snapshot)
+    _print_shadow_result(result)
     return 0
+
+
+def _paper_step_status(result) -> str:
+    if result.idempotent_replay:
+        return "idempotent"
+    if result.observation is not None:
+        return "settled"
+    return "pending"
+
+
+def _successful_cycle_report(args: argparse.Namespace, artifact, snapshot, result, *, snapshot_status: str) -> dict:
+    if bool(result.broker_execution_available):
+        raise ValueError("shadow result may not enable broker execution")
+    return {
+        "schema_version": 1,
+        "status": "ok",
+        "provider": args.provider,
+        "strategy_id": result.strategy_id,
+        "artifact_id": result.artifact_id,
+        "research_cycle_id": artifact.research_cycle_id,
+        "snapshot_id": snapshot.snapshot_id,
+        "snapshot_fingerprint": snapshot.manifest.dataset_fingerprint,
+        "snapshot_status": snapshot_status,
+        "paper_step_status": _paper_step_status(result),
+        "processed_timestamp": result.processed_timestamp,
+        "pending_signal_timestamp": result.pending_signal_timestamp,
+        "paper_observation_timestamp": (
+            None if result.observation is None else result.observation.timestamp
+        ),
+        "target_count": sum(abs(float(value)) > 1e-12 for value in result.target_weights.values()),
+        "broker_execution_available": False,
+    }
 
 
 def _run_shadow_cycle(args: argparse.Namespace) -> int:
@@ -208,7 +265,11 @@ def _run_shadow_cycle(args: argparse.Namespace) -> int:
         start = args.start
     end = args.end or datetime.now(timezone.utc).date().isoformat()
     provider = resolve_shadow_provider(args.provider)
-    store = SnapshotStore(args.snapshot_root)
+    root = Path(args.snapshot_root)
+    existing_snapshot_ids = {
+        child.name for child in root.iterdir() if child.is_dir()
+    } if root.is_dir() else set()
+    store = SnapshotStore(root)
     snapshot = download_market_snapshot(
         provider,
         artifact.symbols,
@@ -222,9 +283,23 @@ def _run_shadow_cycle(args: argparse.Namespace) -> int:
         },
         reuse_identical=True,
     )
+    snapshot_status = "reused" if snapshot.snapshot_id in existing_snapshot_ids else "new"
+    result = _execute_shadow_snapshot(args, snapshot)
+    if args.report:
+        _write_json_atomic(
+            args.report,
+            _successful_cycle_report(
+                args,
+                artifact,
+                snapshot,
+                result,
+                snapshot_status=snapshot_status,
+            ),
+        )
     print(f"refreshed_snapshot_id={snapshot.snapshot_id}")
     print(f"refreshed_snapshot_fingerprint={snapshot.manifest.dataset_fingerprint}")
-    return _run_shadow_snapshot(args, snapshot)
+    _print_shadow_result(result)
+    return 0
 
 
 def run_from_args(args: argparse.Namespace) -> int:
@@ -293,5 +368,17 @@ def main(argv=None) -> int:
     try:
         return run_from_args(args)
     except (ProviderError, DownloadError, ValueError) as exc:
+        if args.command == "cycle" and getattr(args, "report", None):
+            _write_json_atomic(
+                args.report,
+                {
+                    "schema_version": 1,
+                    "status": "error",
+                    "provider": args.provider,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                    "broker_execution_available": False,
+                },
+            )
         parser.error(str(exc))
     return 2
