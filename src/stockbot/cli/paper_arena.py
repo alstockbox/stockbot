@@ -557,6 +557,7 @@ def run_from_args(args: argparse.Namespace) -> int:
             args.audit_ledger,
             quarantine_start=research.quarantine_start,
             strategy_id=artifact.strategy_id,
+            research_cycle_id=research.research_cycle_id,
         )
         records = ledger.records(strategy_id=artifact.strategy_id)
         if not records:
