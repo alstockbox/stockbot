@@ -189,6 +189,44 @@ def test_verified_quarantine_audit_rejects_string_score_even_when_hash_coercion_
         )
 
 
+def test_verified_quarantine_audit_rejects_non_finite_score_even_with_matching_audit_id(tmp_path):
+    bars = _bars()
+    quarantine = _quarantine()
+    spec = freeze_strategy_spec(_candidate("candidate-a", 1.0), top_fraction=0.25, weighting="equal")
+    ledger = tmp_path / "audit-ledger.json"
+
+    result = run_single_quarantine_audit(
+        bars,
+        quarantine,
+        spec,
+        ledger_path=ledger,
+        holdout_config=_relaxed_holdout(),
+    )
+    payload = json.loads(ledger.read_text(encoding="utf-8"))
+    item = payload[0]
+    item["score"] = float("nan")
+    identity = quarantine_audit_module._audit_identity_payload(
+        quarantine_start=item["quarantine_start"],
+        quarantine_id=item["quarantine_id"],
+        strategy_id=item["strategy_id"],
+        experiment_id=item["experiment_id"],
+        score=item["score"],
+        passed=item["passed"],
+        reasons=tuple(item["reasons"]),
+        audited_at=item["audited_at"],
+        research_cycle_id=item.get("research_cycle_id", ""),
+    )
+    item["audit_id"] = quarantine_audit_module._audit_id(identity)
+    ledger.write_text(json.dumps(payload, sort_keys=True, indent=2), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="audit integrity"):
+        quarantine_audit_module.load_verified_quarantine_audit_record(
+            ledger,
+            quarantine_start=result.manifest.start,
+            strategy_id=spec.strategy_id,
+        )
+
+
 def test_verified_quarantine_audit_lookup_requires_matching_cycle_and_strategy(tmp_path):
     bars = _bars()
     quarantine = _quarantine()
