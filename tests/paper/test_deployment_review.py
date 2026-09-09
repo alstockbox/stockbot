@@ -34,6 +34,7 @@ def _audit(**overrides):
     payload = {
         "strategy_id": "strategy-a",
         "experiment_id": "experiment-a",
+        "research_cycle_id": "cycle-a",
         "quarantine_start": "2026-01-02",
         "passed": True,
     }
@@ -93,6 +94,15 @@ def test_bound_deployment_review_requires_one_lineage_across_all_evidence():
             research_evidence=_research(),
             artifact_manifest=_artifact(),
             quarantine_audit_record=_audit(experiment_id="different-experiment"),
+            paper_report=_paper(),
+            paper_provenance_report=_provenance(),
+        )
+
+    with pytest.raises(ValueError, match="audit research cycle"):
+        deployment_gate.evaluate_bound_deployment_review(
+            research_evidence=_research(),
+            artifact_manifest=_artifact(),
+            quarantine_audit_record=_audit(research_cycle_id="different-cycle"),
             paper_report=_paper(),
             paper_provenance_report=_provenance(),
         )
