@@ -33,8 +33,23 @@ def _payload():
     }
 
 
+def _live_vintage(round_name="2026:1", publication_date="2026-03-19"):
+    return {
+        "metadata": {
+            "forecast_cutoff_date": "2026-02-28",
+            "policy_round": round_name,
+            "policy_round_end_dtm": publication_date,
+        },
+        "observations": [
+            {"dt": "2026-01-31", "value": 2.0},
+            {"dt": "2026-02-28", "value": 1.7},
+            {"dt": "2026-06-30", "value": 1.5},
+        ],
+    }
+
+
 def _live_payload():
-    """Representative Monetary Policy Data v1 production response observed 2026-09-10."""
+    """Representative explicit-round production response observed 2026-09-10."""
 
     return {
         "data": [
@@ -45,18 +60,27 @@ def _live_payload():
                     "description": "CPIF",
                     "unit": "Annual percentage change",
                 },
-                "vintages": {
-                    "metadata": {
-                        "forecast_cutoff_date": "2026-02-28",
-                        "policy_round": "2026:1",
-                        "policy_round_end_dtm": "2026-03-19",
-                    },
-                    "observations": [
-                        {"dt": "2026-01-31", "value": 2.0},
-                        {"dt": "2026-02-28", "value": 1.7},
-                        {"dt": "2026-06-30", "value": 1.5},
-                    ],
+                "vintages": _live_vintage(),
+            }
+        ]
+    }
+
+
+def _live_default_payload():
+    """Representative default production response where vintages is a list."""
+
+    latest = _live_vintage("2026:2", "2026-06-17")
+    latest["metadata"]["forecast_cutoff_date"] = "2026-05-31"
+    return {
+        "data": [
+            {
+                "external_id": "SEMCPIFNAYNA",
+                "metadata": {
+                    "decimals": 2,
+                    "description": "CPIF",
+                    "unit": "Annual percentage change",
                 },
+                "vintages": [latest],
             }
         ]
     }
@@ -104,6 +128,19 @@ def test_live_nested_schema_uses_policy_round_publication_time_without_forecast_
     assert all(row.available_time == "2026-03-19T00:00:00+00:00" for row in observations)
     assert all("round=2026:1" in (row.revision_id or "") for row in observations)
     assert all(row.observation_time < row.available_time for row in observations)
+
+
+def test_live_default_schema_accepts_vintage_list_and_uses_latest_publication_time():
+    provider = RiksbankMonetaryPolicyProvider(transport=_FakeTransport())
+    observations = provider.observations_from_payload(
+        _live_default_payload(),
+        feature_name="cpif_yoy",
+        series_id="SEMCPIFNAYNA",
+    )
+
+    assert [row.value for row in observations] == [2.0, 1.7]
+    assert all(row.available_time == "2026-06-17T00:00:00+00:00" for row in observations)
+    assert all("round=2026:2" in (row.revision_id or "") for row in observations)
 
 
 def test_missing_cutoff_or_publication_time_fails_closed():
