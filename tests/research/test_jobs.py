@@ -50,6 +50,7 @@ def test_job_manifest_is_deterministic_for_same_research_inputs():
         memory_path="research_memory/experiments.jsonl",
         auxiliary_fingerprint="aux-a",
         universe_fingerprint="universe-a",
+        quality_fingerprint="quality-a",
     )
     first = make_job_manifest(
         **kwargs,
@@ -62,7 +63,8 @@ def test_job_manifest_is_deterministic_for_same_research_inputs():
     assert first.job_id == second.job_id
     assert first.horizons == (1, 5, 20)
     assert first.auxiliary_features == ("eps_ttm", "policy_rate")
-    assert first.schema_version == 3
+    assert first.quality_fingerprint == "quality-a"
+    assert first.schema_version == 4
 
 
 def test_job_identity_changes_when_sealed_quarantine_boundary_changes():
@@ -101,7 +103,18 @@ def test_job_identity_changes_when_external_research_inputs_change():
         auxiliary_features=("policy_rate",),
     )
     universe = make_job_manifest(**kwargs, universe_fingerprint="universe-a")
-    assert len({baseline.job_id, aux_a.job_id, aux_b.job_id, universe.job_id}) == 4
+    quality_a = make_job_manifest(**kwargs, quality_fingerprint="quality-a")
+    quality_b = make_job_manifest(**kwargs, quality_fingerprint="quality-b")
+    assert len(
+        {
+            baseline.job_id,
+            aux_a.job_id,
+            aux_b.job_id,
+            universe.job_id,
+            quality_a.job_id,
+            quality_b.job_id,
+        }
+    ) == 6
 
 
 def test_run_summary_and_atomic_json_writer(tmp_path):
@@ -115,6 +128,7 @@ def test_run_summary_and_atomic_json_writer(tmp_path):
         auxiliary_fingerprint="aux-a",
         auxiliary_features=("policy_rate",),
         universe_fingerprint="universe-a",
+        quality_fingerprint="quality-a",
     )
     manifest_target = tmp_path / "job.json"
     write_json_record(manifest_target, manifest)
@@ -122,7 +136,8 @@ def test_run_summary_and_atomic_json_writer(tmp_path):
     assert manifest_payload["auxiliary_features"] == ["policy_rate"]
     assert manifest_payload["auxiliary_fingerprint"] == "aux-a"
     assert manifest_payload["universe_fingerprint"] == "universe-a"
-    assert manifest_payload["schema_version"] == 3
+    assert manifest_payload["quality_fingerprint"] == "quality-a"
+    assert manifest_payload["schema_version"] == 4
 
     summary = make_run_summary(manifest.job_id, _Report(), _Diagnostics())
     target = tmp_path / "summary.json"
