@@ -77,6 +77,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Fingerprint-verified StockBot point-in-time universe artifact used by neutralization/data controls",
     )
     parser.add_argument(
+        "--factory-attest-adjusted-prices-verified",
+        action="store_true",
+        help="Explicitly attest that adjusted historical prices were verified by the ingestion pipeline",
+    )
+    parser.add_argument(
+        "--factory-attest-corporate-actions-complete",
+        action="store_true",
+        help="Explicitly attest that split/dividend corporate actions are complete for the research dataset",
+    )
+    parser.add_argument(
+        "--factory-attest-corporate-actions-point-in-time",
+        action="store_true",
+        help="Explicitly attest that corporate-action history is point-in-time correct",
+    )
+    parser.add_argument(
         "--factory-quarantine-start",
         default=None,
         help="Explicit sealed audit boundary; rows at/after this date are excluded from all routine research",
