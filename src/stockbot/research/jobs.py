@@ -39,8 +39,11 @@ class ResearchRunSummary:
     specialist_router_score: float | None
     specialist_scores: dict[str, float]
     specialist_candidate_pairs_tested: int
+    champion_paper_ready: bool
+    champion_paper_readiness_score: float | None
+    champion_paper_readiness_reasons: tuple[str, ...]
     completed_at: str
-    schema_version: int = 2
+    schema_version: int = 3
 
 
 def make_job_manifest(
@@ -90,6 +93,21 @@ def make_job_manifest(
     )
 
 
+def _champion_readiness(champion: Any | None) -> tuple[bool, float | None, tuple[str, ...]]:
+    if champion is None:
+        return False, None, ("no_champion",)
+    readiness = getattr(champion, "paper_readiness", None)
+    if readiness is None:
+        return False, None, ("paper_readiness_missing",)
+    reasons = tuple(str(value) for value in (getattr(readiness, "reasons", ()) or ()))
+    score = getattr(readiness, "score", None)
+    return (
+        bool(getattr(readiness, "ready", False)),
+        None if score is None else float(score),
+        reasons,
+    )
+
+
 def make_run_summary(
     job_id: str,
     report: Any,
@@ -98,6 +116,9 @@ def make_run_summary(
     champion = getattr(report, "champion_candidate", None)
     active = getattr(report, "active_champion", None)
     ensemble = getattr(report, "ensemble_report", None)
+    champion_paper_ready, champion_readiness_score, champion_readiness_reasons = (
+        _champion_readiness(champion)
+    )
 
     router = None
     specialists: dict[str, Any] = {}
@@ -119,6 +140,9 @@ def make_run_summary(
         specialist_router_score=(None if router is None else float(router.score)),
         specialist_scores={key: float(value.score) for key, value in specialists.items()},
         specialist_candidate_pairs_tested=pairs_tested,
+        champion_paper_ready=champion_paper_ready,
+        champion_paper_readiness_score=champion_readiness_score,
+        champion_paper_readiness_reasons=champion_readiness_reasons,
         completed_at=datetime.now(timezone.utc).isoformat(),
     )
 
@@ -140,6 +164,8 @@ def write_json_record(path: str | Path, record: ResearchJobManifest | ResearchRu
         payload["horizons"] = list(payload["horizons"])
     if "auxiliary_features" in payload:
         payload["auxiliary_features"] = list(payload["auxiliary_features"])
+    if "champion_paper_readiness_reasons" in payload:
+        payload["champion_paper_readiness_reasons"] = list(payload["champion_paper_readiness_reasons"])
     _atomic_write_json(path, payload)
 
 
