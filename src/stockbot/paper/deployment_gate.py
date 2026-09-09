@@ -3,8 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import math
 from pathlib import Path
 
+from stockbot.data.research_quality import ResearchDataQualityCriteria
 from stockbot.data.schemas import DataGrade
 from stockbot.paper.arena import PaperArenaReport
 from stockbot.research.deep_feedback import build_research_cycle_id
@@ -77,13 +79,131 @@ def _readiness_fingerprint(summary: dict) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def _quality_bool(value: object, label: str) -> bool:
+    if type(value) is not bool:
+        raise ValueError(f"research data quality {label} must be boolean")
+    return value
+
+
+def _quality_fraction(value: object, label: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"research data quality {label} must be numeric")
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"research data quality {label} must be numeric") from exc
+    if not math.isfinite(result) or not 0.0 <= result <= 1.0:
+        raise ValueError(f"research data quality {label} must be finite in [0,1]")
+    return result
+
+
+def _recomputed_quality_eligibility(payload: dict) -> bool:
+    """Recompute default research-grade eligibility from persisted primitive evidence."""
+
+    cfg = ResearchDataQualityCriteria()
+    if _quality_bool(payload.get("canonical_schema_valid"), "canonical_schema_valid") is not True:
+        raise ValueError("research data quality canonical schema is not verified")
+
+    adjusted_coverage = _quality_fraction(payload.get("adjusted_coverage"), "adjusted_coverage")
+    retrieval_causality = _quality_fraction(
+        payload.get("retrieval_causality_fraction"),
+        "retrieval_causality_fraction",
+    )
+    corporate_action_fields_present = _quality_bool(
+        payload.get("corporate_action_fields_present"),
+        "corporate_action_fields_present",
+    )
+
+    attestation = payload.get("attestation")
+    if not isinstance(attestation, dict):
+        raise ValueError("research data quality attestation is invalid")
+    adjusted_prices_verified = _quality_bool(
+        attestation.get("adjusted_prices_verified"),
+        "adjusted_prices_verified",
+    )
+    corporate_actions_complete = _quality_bool(
+        attestation.get("corporate_actions_complete"),
+        "corporate_actions_complete",
+    )
+    corporate_actions_point_in_time = _quality_bool(
+        attestation.get("corporate_actions_point_in_time"),
+        "corporate_actions_point_in_time",
+    )
+
+    reasons: list[str] = []
+    if adjusted_coverage < cfg.min_adjusted_coverage:
+        reasons.append("insufficient_adjusted_price_coverage")
+    if retrieval_causality < cfg.min_retrieval_causality:
+        reasons.append("non_causal_retrieval_timestamps")
+    if not corporate_action_fields_present:
+        reasons.append("corporate_action_fields_incomplete")
+    if cfg.require_adjusted_prices_verified and not adjusted_prices_verified:
+        reasons.append("adjusted_prices_not_verified")
+    if cfg.require_corporate_actions_complete and not corporate_actions_complete:
+        reasons.append("corporate_actions_not_attested_complete")
+    if cfg.require_corporate_actions_point_in_time and not corporate_actions_point_in_time:
+        reasons.append("corporate_actions_not_point_in_time_attested")
+
+    universe = payload.get("universe_report")
+    if universe is None:
+        if (
+            cfg.require_point_in_time_universe
+            or cfg.require_survivorship_control
+            or cfg.require_delisted_securities
+        ):
+            reasons.append("point_in_time_universe_missing")
+    elif isinstance(universe, dict):
+        membership_coverage = _quality_fraction(
+            universe.get("membership_coverage"),
+            "universe membership_coverage",
+        )
+        point_in_time_membership = _quality_bool(
+            universe.get("point_in_time_membership"),
+            "universe point_in_time_membership",
+        )
+        survivorship_bias_controlled = _quality_bool(
+            universe.get("survivorship_bias_controlled"),
+            "universe survivorship_bias_controlled",
+        )
+        includes_delisted_securities = _quality_bool(
+            universe.get("includes_delisted_securities"),
+            "universe includes_delisted_securities",
+        )
+        if membership_coverage < cfg.min_universe_coverage:
+            reasons.append("insufficient_point_in_time_membership_coverage")
+        if cfg.require_point_in_time_universe and not point_in_time_membership:
+            reasons.append("membership_not_point_in_time")
+        if cfg.require_survivorship_control and not survivorship_bias_controlled:
+            reasons.append("survivorship_bias_not_controlled")
+        if cfg.require_delisted_securities and not includes_delisted_securities:
+            reasons.append("delisted_securities_not_included")
+    else:
+        raise ValueError("research data quality universe evidence is invalid")
+
+    recomputed_reasons = tuple(dict.fromkeys(reasons))
+    persisted_reasons = payload.get("reasons")
+    if not isinstance(persisted_reasons, list):
+        raise ValueError("research data quality reasons are invalid")
+    if tuple(str(value) for value in persisted_reasons) != recomputed_reasons:
+        raise ValueError("research data quality reasons mismatch")
+
+    persisted_eligible = _quality_bool(
+        payload.get("research_grade_eligible"),
+        "research_grade_eligible",
+    )
+    recomputed_eligible = not recomputed_reasons
+    if persisted_eligible is not recomputed_eligible:
+        raise ValueError("research data quality eligibility mismatch")
+    return recomputed_eligible
+
+
 def _expected_effective_grade(payload: dict) -> DataGrade:
     try:
         declared = DataGrade(str(payload["declared_grade"]))
         persisted = DataGrade(str(payload["effective_grade"]))
     except (KeyError, ValueError) as exc:
         raise ValueError("research data grade evidence is invalid") from exc
-    eligible = bool(payload.get("research_grade_eligible", False))
+    eligible = _recomputed_quality_eligibility(payload)
     if declared is DataGrade.RESEARCH_GRADE:
         expected = DataGrade.RESEARCH_GRADE if eligible else DataGrade.BOOTSTRAP
     else:
