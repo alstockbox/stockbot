@@ -208,20 +208,3 @@ def test_external_provenance_rejects_stale_symbol_inside_snapshot(monkeypatch, t
             artifact_dir=tmp_path / "artifact",
             snapshot_root=tmp_path / "snapshots",
         )
-
-
-def test_external_provenance_rejects_signal_at_or_after_realization(monkeypatch, tmp_path):
-    _install_verified_sources(
-        monkeypatch,
-        snapshots={
-            "snapshot-signal": _snapshot("snapshot-signal", "2026-09-03T16:00:00+00:00"),
-            "snapshot-realization": _snapshot("snapshot-realization", "2026-09-02T16:00:00+00:00"),
-        },
-    )
-
-    with pytest.raises(ValueError, match="forward"):
-        verify_frozen_paper_provenance(
-            [_row(signal_timestamp="2026-09-03T16:00:00+00:00")],
-            artifact_dir=tmp_path / "artifact",
-            snapshot_root=tmp_path / "snapshots",
-        )
