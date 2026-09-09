@@ -329,6 +329,38 @@ def _compact_neutralization(report: NeutralizationReport) -> dict[str, object]:
     }
 
 
+def _compact_sector_cap(report: SectorCapAllocationReport) -> dict[str, object]:
+    before = report.baseline_sector_exposure
+    after = report.constrained_sector_exposure
+    return {
+        "max_sector_weight": report.max_sector_weight,
+        "baseline_score": report.baseline_score,
+        "constrained_score": report.constrained_score,
+        "score_delta": report.score_delta,
+        "baseline_sharpe": report.baseline_metrics.get("sharpe", 0.0),
+        "constrained_sharpe": report.constrained_metrics.get("sharpe", 0.0),
+        "baseline_cagr": report.baseline_metrics.get("cagr", 0.0),
+        "constrained_cagr": report.constrained_metrics.get("cagr", 0.0),
+        "baseline_stress": report.baseline_stress.score,
+        "constrained_stress": report.constrained_stress.score,
+        "average_signal_max_sector_weight_before": report.average_signal_max_sector_weight_before,
+        "average_signal_max_sector_weight_after": report.average_signal_max_sector_weight_after,
+        "average_cash_weight": report.average_cash_weight,
+        "executed_sector_coverage_before": before.sector_coverage,
+        "executed_sector_coverage_after": after.sector_coverage,
+        "average_max_sector_weight_before": before.average_max_sector_weight,
+        "average_max_sector_weight_after": after.average_max_sector_weight,
+        "worst_max_sector_weight_before": before.worst_max_sector_weight,
+        "worst_max_sector_weight_after": after.worst_max_sector_weight,
+        "sector_hhi_before": before.average_sector_hhi,
+        "sector_hhi_after": after.average_sector_hhi,
+        "active_sectors_before": before.average_active_sectors,
+        "active_sectors_after": after.average_active_sectors,
+        "unclassified_weight_before": before.average_unclassified_weight,
+        "unclassified_weight_after": after.average_unclassified_weight,
+    }
+
+
 def compact_deep_diagnostics(diagnostics: DeepResearchDiagnostics) -> dict[str, object]:
     """Produce a JSON-friendly summary without serializing prediction/return series."""
 
@@ -357,6 +389,11 @@ def compact_deep_diagnostics(diagnostics: DeepResearchDiagnostics) -> dict[str, 
             None
             if item.neutralization is None
             else _compact_neutralization(item.neutralization)
+        )
+        sector_cap = (
+            None
+            if item.sector_cap is None
+            else _compact_sector_cap(item.sector_cap)
         )
 
         auxiliary_ablation = None
@@ -418,6 +455,7 @@ def compact_deep_diagnostics(diagnostics: DeepResearchDiagnostics) -> dict[str, 
                 "observations": item.factor_exposure.observations,
             },
             "neutralization": neutralization,
+            "sector_cap": sector_cap,
             "auxiliary_ablation": auxiliary_ablation,
             "liquidity_execution": {
                 "score": item.liquidity_execution.score,
