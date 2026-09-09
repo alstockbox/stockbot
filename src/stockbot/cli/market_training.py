@@ -22,6 +22,7 @@ from stockbot.data.research_quality import (
     verified_data_grade,
 )
 from stockbot.data.snapshots import SnapshotStore
+from stockbot.paper.runner import freeze_shadow_strategy
 from stockbot.research.deep_diagnostics import compact_deep_diagnostics
 from stockbot.research.deep_feedback import make_research_cycle_manifest
 from stockbot.research.factory import ResearchFactoryConfig
@@ -35,6 +36,7 @@ from stockbot.research.market_training import (
 )
 from stockbot.research.population import ModelPopulationConfig
 from stockbot.research.quarantine import QuarantineConfig, load_quarantine_manifest
+from stockbot.research.quarantine_audit import freeze_strategy_spec
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -57,6 +59,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--factory-workers", type=int, default=4, help="Parallel challenger workers used by V2")
     parser.add_argument("--factory-memory", default="research_memory/experiments.jsonl", help="Append-only research-memory JSONL path")
     parser.add_argument("--factory-run-dir", default=None, help="Optional directory for scheduler-friendly job manifest and research artifacts")
+    parser.add_argument(
+        "--factory-freeze-shadow-dir",
+        default=None,
+        help=(
+            "Optional directory for a hash-verified frozen shadow artifact built only from the "
+            "factory champion; no fallback candidate and no broker execution"
+        ),
+    )
     parser.add_argument(
         "--factory-deep-feedback-weight",
         type=float,
@@ -376,6 +386,35 @@ def run_from_args(args: argparse.Namespace) -> int:
             auxiliary_min_coverage=args.factory_auxiliary_min_coverage,
         )
 
+        shadow_manifest = None
+        if args.factory_freeze_shadow_dir:
+            if report.champion_candidate is None:
+                print("shadow_freeze=skipped_no_champion")
+            else:
+                champion = report.champion_candidate
+                frozen_spec = freeze_strategy_spec(champion)
+                shadow_execution = LiquidityExecutionConfig(
+                    capital=args.factory_diagnostic_capital,
+                    commission_bps=args.factory_diagnostic_commission_bps,
+                    spread_bps=args.factory_diagnostic_spread_bps,
+                    impact_bps_at_one_pct_adv=args.factory_diagnostic_impact_bps,
+                    max_participation=args.factory_diagnostic_max_participation,
+                    adv_window=args.factory_diagnostic_adv_window,
+                )
+                shadow_manifest = freeze_shadow_strategy(
+                    snapshot.bars,
+                    frozen_spec,
+                    feature_names=champion.result.artifact.feature_names,
+                    research_cycle_id=research_cycle_id,
+                    source_dataset_fingerprint=manifest.dataset_fingerprint,
+                    output_dir=Path(args.factory_freeze_shadow_dir),
+                    execution_config=shadow_execution,
+                    auxiliary_store=auxiliary_store,
+                    auxiliary_feature_names=auxiliary_feature_names,
+                    auxiliary_max_age_days=args.factory_auxiliary_max_age_days,
+                    auxiliary_min_coverage=args.factory_auxiliary_min_coverage,
+                )
+
         specialist_diagnostics = None
         if args.factory_regime_specialists:
             specialist_diagnostics = run_snapshot_regime_specialists(
@@ -460,6 +499,11 @@ def run_from_args(args: argparse.Namespace) -> int:
             print(f"  quarantine_periods={quarantine_manifest.quarantine_periods}")
             print(f"  quarantine_rows={quarantine_manifest.quarantine_rows}")
             print(f"  quarantine_manifest={quarantine_manifest_path}")
+        if shadow_manifest is not None:
+            print(f"shadow_artifact_id={shadow_manifest.artifact_id}")
+            print(f"shadow_strategy_id={shadow_manifest.strategy_id}")
+            print(f"shadow_artifact_dir={Path(args.factory_freeze_shadow_dir)}")
+            print("shadow_broker_execution=disabled")
 
         for index, candidate in enumerate(report.candidates[:20], start=1):
             gate = "pass" if candidate.gate.passed else "reject"
