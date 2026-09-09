@@ -23,6 +23,7 @@ class PaperArenaCriteria:
     max_average_turnover: float = 2.0
     min_bootstrap_confidence: float = 0.70
     reject_drift: bool = True
+    require_frozen_provenance: bool = False
 
     def __post_init__(self) -> None:
         if self.min_sessions <= 0 or self.min_live_span_days <= 0:
@@ -52,6 +53,50 @@ class PaperArenaReport:
     evidence_score: float
     live_eligible: bool
     reasons: tuple[str, ...]
+    model_artifact_id: str | None = None
+    research_cycle_id: str | None = None
+    frozen_provenance_complete: bool = False
+
+
+def _single_optional_lineage(
+    observations: list[PaperObservation] | tuple[PaperObservation, ...],
+    *,
+    attribute: str,
+    label: str,
+) -> str | None:
+    raw = [getattr(row, attribute) for row in observations]
+    present = [str(value).strip() for value in raw if value is not None and str(value).strip()]
+    if not present:
+        return None
+    if len(present) != len(raw):
+        raise ValueError(f"paper track contains partial {label} lineage")
+    unique = set(present)
+    if len(unique) != 1:
+        raise ValueError(f"paper track contains mixed {label} lineage")
+    return present[0]
+
+
+def _frozen_provenance(
+    observations: list[PaperObservation] | tuple[PaperObservation, ...],
+) -> tuple[str | None, str | None, bool]:
+    artifact_id = _single_optional_lineage(
+        observations,
+        attribute="model_artifact_id",
+        label="model artifact",
+    )
+    cycle_id = _single_optional_lineage(
+        observations,
+        attribute="research_cycle_id",
+        label="research cycle",
+    )
+    complete = bool(
+        artifact_id
+        and cycle_id
+        and all(row.signal_timestamp for row in observations)
+        and all(row.signal_snapshot_fingerprint for row in observations)
+        and all(row.realization_snapshot_fingerprint for row in observations)
+    )
+    return artifact_id, cycle_id, complete
 
 
 def evaluate_paper_track(
@@ -61,10 +106,11 @@ def evaluate_paper_track(
 ) -> PaperArenaReport:
     """Evaluate forward paper evidence without granting any broker authority.
 
-    The report is intentionally stricter than a backtest leaderboard: it requires a
-    minimum number of forward sessions, calendar span, fill quality, risk control and
-    bootstrap confidence. ``live_eligible`` is only an evidence flag; it does not place
-    orders or bypass the hard risk engine.
+    Generic research/synthetic tracks may omit frozen-runner provenance. Explicit
+    artifact/cycle lineage, however, may never be partial or mixed under one strategy.
+    Operational/deployment callers can require full frozen provenance: one artifact,
+    one research cycle, signal time, signal snapshot and realization snapshot on every
+    observation.
     """
 
     if not observations:
@@ -72,6 +118,7 @@ def evaluate_paper_track(
     ids = {row.strategy_id for row in observations}
     if len(ids) != 1:
         raise ValueError("paper track must contain exactly one strategy_id")
+    artifact_id, cycle_id, frozen_provenance_complete = _frozen_provenance(observations)
     cfg = criteria or PaperArenaCriteria()
     ordered = sorted(observations, key=lambda row: row.timestamp)
     timestamps = pd.to_datetime([row.timestamp for row in ordered], utc=True)
@@ -127,6 +174,8 @@ def evaluate_paper_track(
         reasons.append("paper_bootstrap_confidence")
     if cfg.reject_drift and drift.degraded:
         reasons.append("paper_drift")
+    if cfg.require_frozen_provenance and not frozen_provenance_complete:
+        reasons.append("paper_frozen_provenance")
 
     evidence_score = float(
         np.clip(
@@ -159,4 +208,7 @@ def evaluate_paper_track(
         evidence_score=evidence_score,
         live_eligible=not reasons,
         reasons=tuple(reasons),
+        model_artifact_id=artifact_id,
+        research_cycle_id=cycle_id,
+        frozen_provenance_complete=frozen_provenance_complete,
     )
