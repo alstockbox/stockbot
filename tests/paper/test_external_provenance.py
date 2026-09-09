@@ -183,3 +183,28 @@ def test_external_provenance_requires_continuous_forward_snapshot_chain(monkeypa
             artifact_dir=tmp_path / "artifact",
             snapshot_root=tmp_path / "snapshots",
         )
+
+
+def test_external_provenance_rejects_stale_symbol_inside_snapshot(monkeypatch, tmp_path):
+    signal_snapshot = _snapshot(
+        "snapshot-signal",
+        "2026-09-01T16:00:00+00:00",
+    )
+    signal_snapshot.manifest.last_observation["BBB"] = "2026-08-31T16:00:00+00:00"
+    _install_verified_sources(
+        monkeypatch,
+        snapshots={
+            "snapshot-signal": signal_snapshot,
+            "snapshot-realization": _snapshot(
+                "snapshot-realization",
+                "2026-09-02T16:00:00+00:00",
+            ),
+        },
+    )
+
+    with pytest.raises(ValueError, match="timestamp"):
+        verify_frozen_paper_provenance(
+            [_row()],
+            artifact_dir=tmp_path / "artifact",
+            snapshot_root=tmp_path / "snapshots",
+        )
