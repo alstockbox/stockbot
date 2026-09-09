@@ -8,6 +8,7 @@ import stockbot.paper.deployment_gate as deployment_gate_module
 from stockbot.data.schemas import DataGrade
 from stockbot.paper.deployment_gate import evaluate_deployment_evidence
 from stockbot.research.deep_feedback import build_research_cycle_id
+from stockbot.research.jobs import make_job_manifest
 
 
 def _verified_provenance(**overrides):
@@ -162,6 +163,65 @@ def _write_research_bundle(tmp_path):
     return run_dir, artifact
 
 
+def _rebind_semantically_invalid_quality_bundle(run_dir, artifact):
+    quality_path = run_dir / "data_quality.json"
+    quality = json.loads(quality_path.read_text(encoding="utf-8"))
+    quality["attestation"]["adjusted_prices_verified"] = False
+    # Simulate a malicious/self-consistent bundle that keeps the derived claim green.
+    quality["research_grade_eligible"] = True
+    quality["reasons"] = []
+    canonical_quality = {
+        key: value
+        for key, value in quality.items()
+        if key not in {"quality_fingerprint", "declared_grade", "effective_grade"}
+    }
+    quality_raw = json.dumps(
+        canonical_quality,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    quality_fingerprint = hashlib.sha256(quality_raw).hexdigest()
+    quality["quality_fingerprint"] = quality_fingerprint
+    quality_path.write_text(json.dumps(quality, sort_keys=True, indent=2), encoding="utf-8")
+
+    job_path = run_dir / "job.json"
+    job = json.loads(job_path.read_text(encoding="utf-8"))
+    job["quality_fingerprint"] = quality_fingerprint
+    rebound_job = make_job_manifest(
+        snapshot_id=job["snapshot_id"],
+        dataset_fingerprint=job["dataset_fingerprint"],
+        horizons=tuple(job["horizons"]),
+        max_candidates=job["max_candidates"],
+        max_workers=job["max_workers"],
+        memory_path=job.get("memory_path"),
+        quarantine_start=job.get("quarantine_start"),
+        auxiliary_fingerprint=job.get("auxiliary_fingerprint"),
+        auxiliary_features=tuple(job.get("auxiliary_features", ())),
+        universe_fingerprint=job.get("universe_fingerprint"),
+        quality_fingerprint=quality_fingerprint,
+    )
+    job["job_id"] = rebound_job.job_id
+    job_path.write_text(json.dumps(job, sort_keys=True, indent=2), encoding="utf-8")
+
+    summary_path = run_dir / "summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["job_id"] = rebound_job.job_id
+    summary_path.write_text(json.dumps(summary, sort_keys=True, indent=2), encoding="utf-8")
+
+    cycle_path = run_dir / "research_cycle.json"
+    cycle = json.loads(cycle_path.read_text(encoding="utf-8"))
+    cycle["quality_fingerprint"] = quality_fingerprint
+    cycle["research_cycle_id"] = build_research_cycle_id(
+        dataset_fingerprint=cycle["dataset_fingerprint"],
+        quarantine_start=cycle.get("quarantine_start"),
+        universe_fingerprint=cycle.get("universe_fingerprint"),
+        auxiliary_fingerprint=cycle.get("auxiliary_fingerprint"),
+        quality_fingerprint=quality_fingerprint,
+    )
+    cycle_path.write_text(json.dumps(cycle, sort_keys=True, indent=2), encoding="utf-8")
+    artifact.research_cycle_id = cycle["research_cycle_id"]
+
+
 def test_manual_live_review_requires_all_independent_evidence_layers():
     audit = SimpleNamespace(holdout_report=SimpleNamespace(passed=True))
     paper = SimpleNamespace(live_eligible=True, frozen_provenance_complete=True)
@@ -274,6 +334,17 @@ def test_research_evidence_rejects_tampered_readiness_claim(tmp_path):
     summary_path.write_text(json.dumps(summary, sort_keys=True, indent=2), encoding="utf-8")
 
     with pytest.raises(ValueError, match="readiness"):
+        deployment_gate_module.verify_research_evidence_bundle(
+            run_dir,
+            artifact_manifest=artifact,
+        )
+
+
+def test_research_evidence_recomputes_quality_eligibility_from_primitives(tmp_path):
+    run_dir, artifact = _write_research_bundle(tmp_path)
+    _rebind_semantically_invalid_quality_bundle(run_dir, artifact)
+
+    with pytest.raises(ValueError, match="quality"):
         deployment_gate_module.verify_research_evidence_bundle(
             run_dir,
             artifact_manifest=artifact,
