@@ -146,6 +146,28 @@ def _load_ledger(path: str | Path) -> list[QuarantineAuditRecord]:
     return records
 
 
+def load_verified_quarantine_audit_record(
+    path: str | Path,
+    *,
+    quarantine_start: str,
+    strategy_id: str,
+) -> QuarantineAuditRecord:
+    """Return the integrity-verified audit record for one sealed cycle and strategy."""
+
+    records = _load_ledger(path)
+    same_cycle = [
+        record
+        for record in records
+        if pd.Timestamp(record.quarantine_start) == pd.Timestamp(quarantine_start)
+    ]
+    if not same_cycle:
+        raise ValueError("verified quarantine audit not found for sealed cycle")
+    record = same_cycle[0]
+    if record.strategy_id != str(strategy_id):
+        raise ValueError("verified quarantine audit strategy mismatch")
+    return record
+
+
 def _write_ledger(path: str | Path, records: list[QuarantineAuditRecord]) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
