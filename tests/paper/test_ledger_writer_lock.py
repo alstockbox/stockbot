@@ -32,12 +32,13 @@ def test_paper_ledger_append_fails_closed_when_writer_lock_is_held(tmp_path):
         with pytest.raises(ValueError, match="already being written"):
             ledger.append(second)
         assert path.read_bytes() == before
-        # Reads do not take the writer lock and therefore remain available while a
-        # separate process owns the append critical section.
-        assert ledger.records() == [first]
     finally:
         fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
         holder.close()
+
+    # Verified readers coordinate with the same lock so they cannot inspect the
+    # transient ledger/checkpoint interval of a real append commit.
+    assert ledger.records() == [first]
 
 
 def test_paper_ledger_writer_lock_releases_after_successful_append(tmp_path):
