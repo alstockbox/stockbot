@@ -62,6 +62,9 @@ def _quality_fingerprint(payload: dict) -> str:
 
 def _readiness_fingerprint(summary: dict) -> str:
     try:
+        ready = summary["champion_paper_ready"]
+        if type(ready) is not bool:
+            raise ValueError("research readiness ready flag must be boolean")
         raw_score = summary["champion_paper_readiness_score"]
         if raw_score is None:
             raise ValueError("research readiness score is missing")
@@ -69,7 +72,7 @@ def _readiness_fingerprint(summary: dict) -> str:
         if not math.isfinite(score) or not 0.0 <= score <= 1.0:
             raise ValueError("research readiness score must be finite in [0,1]")
         payload = {
-            "ready": bool(summary["champion_paper_ready"]),
+            "ready": ready,
             "score": score,
             "reasons": [
                 str(value)
@@ -317,7 +320,7 @@ def verify_research_evidence_bundle(
         str(value)
         for value in (summary.get("champion_paper_readiness_reasons", ()) or ())
     )
-    research_ready = bool(summary.get("champion_paper_ready", False)) and not readiness_reasons
+    research_ready = summary["champion_paper_ready"] and not readiness_reasons
     return VerifiedResearchEvidence(
         research_ready=research_ready,
         data_grade=data_grade,
