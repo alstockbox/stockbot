@@ -4,6 +4,13 @@ from stockbot.research.bootstrap_uncertainty import BootstrapInterval, Bootstrap
 from stockbot.research.capacity_curve import CapacityCurveReport, CapacityPoint, evaluate_capacity_curve
 from stockbot.research.champion import ChampionState, JsonChampionStore
 from stockbot.research.deep_diagnostics import CandidateDeepDiagnostics, DeepResearchDiagnostics, compact_deep_diagnostics, run_deep_research_diagnostics
+from stockbot.research.deep_feedback import (
+    DeepResearchFinding,
+    JsonlDeepResearchMemory,
+    build_research_cycle_id,
+    make_deep_findings,
+    rank_adaptive_parent_records,
+)
 from stockbot.research.drift import DriftReport, evaluate_return_drift
 from stockbot.research.ensemble import EnsembleReport, build_horizon_ensemble
 from stockbot.research.factor_exposure import FactorExposureReport, build_internal_factor_returns, evaluate_factor_exposure
@@ -58,6 +65,7 @@ __all__ = [
     "CapacityPoint",
     "ChampionState",
     "DeepResearchDiagnostics",
+    "DeepResearchFinding",
     "DiscoveryResult",
     "DriftReport",
     "EnsembleReport",
@@ -71,6 +79,7 @@ __all__ = [
     "HoldoutConfig",
     "HoldoutReport",
     "JsonChampionStore",
+    "JsonlDeepResearchMemory",
     "JsonlExperimentMemory",
     "ModelPopulationConfig",
     "NeutralizationConfig",
@@ -108,6 +117,7 @@ __all__ = [
     "build_internal_factor_returns",
     "build_market_regime_series",
     "build_regime_router",
+    "build_research_cycle_id",
     "compact_deep_diagnostics",
     "default_stress_suite",
     "evaluate_auxiliary_feature_ablation",
@@ -132,10 +142,12 @@ __all__ = [
     "generate_adaptive_population",
     "generate_model_population",
     "load_quarantine_manifest",
+    "make_deep_findings",
     "make_job_manifest",
     "make_run_summary",
     "mine_hard_negatives",
     "persist_sealed_quarantine",
+    "rank_adaptive_parent_records",
     "risk_adjusted_objective",
     "run_deep_research_diagnostics",
     "run_regime_specialist",
