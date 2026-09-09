@@ -14,6 +14,11 @@ from stockbot.data.snapshots import MarketSnapshot
 from stockbot.data.universe import PointInTimeUniverse
 from stockbot.research.champion import JsonChampionStore
 from stockbot.research.deep_diagnostics import DeepResearchDiagnostics, run_deep_research_diagnostics
+from stockbot.research.deep_feedback import (
+    JsonlDeepResearchMemory,
+    make_deep_findings,
+    rank_adaptive_parent_records,
+)
 from stockbot.research.factory import FactoryReport, ResearchFactory, ResearchFactoryConfig
 from stockbot.research.liquidity_execution import LiquidityExecutionConfig
 from stockbot.research.memory import JsonlExperimentMemory
@@ -78,6 +83,16 @@ def _development_bars(
     return split.development_bars
 
 
+def _validate_deep_feedback_runtime(
+    deep_feedback_path: str | Path | None,
+    research_cycle_id: str | None,
+) -> None:
+    path_supplied = deep_feedback_path is not None
+    cycle_supplied = research_cycle_id is not None and bool(str(research_cycle_id).strip())
+    if path_supplied != cycle_supplied:
+        raise ValueError("deep feedback requires both deep_feedback_path and research_cycle_id")
+
+
 def train_snapshot(
     snapshot: MarketSnapshot,
     model_configs=None,
@@ -115,8 +130,18 @@ def run_snapshot_factory(
     auxiliary_feature_names: tuple[str, ...] | list[str] | None = None,
     auxiliary_max_age_days: int | None = None,
     auxiliary_min_coverage: float = 0.80,
+    deep_feedback_path: str | Path | None = None,
+    research_cycle_id: str | None = None,
+    deep_feedback_weight: float = 0.25,
 ) -> FactoryReport:
-    """Run V2 on development data only with verified data and feature semantics."""
+    """Run V2 on development data only with verified data and feature semantics.
+
+    Optional deep feedback may only influence which already-passed historical
+    experiments receive future mutation budget. Same-cycle findings are ignored by
+    construction and cannot alter gates, holdout scores or promotion eligibility.
+    """
+
+    _validate_deep_feedback_runtime(deep_feedback_path, research_cycle_id)
 
     memory = JsonlExperimentMemory(memory_path) if memory_path else None
     champion_store = None
@@ -126,12 +151,26 @@ def run_snapshot_factory(
 
     effective_config = config or ResearchFactoryConfig()
     if memory is not None and not effective_config.population.adaptive_records:
-        parents = tuple(
-            memory.best(
-                only_passed=True,
-                limit=effective_config.population.adaptive_parent_limit,
+        limit = effective_config.population.adaptive_parent_limit
+        if deep_feedback_path is not None and research_cycle_id is not None:
+            passed_records = [row for row in memory.records() if row.passed_gates]
+            findings = JsonlDeepResearchMemory(deep_feedback_path).records()
+            parents = tuple(
+                rank_adaptive_parent_records(
+                    passed_records,
+                    findings,
+                    current_cycle_id=str(research_cycle_id),
+                    limit=limit,
+                    feedback_weight=deep_feedback_weight,
+                )
             )
-        )
+        else:
+            parents = tuple(
+                memory.best(
+                    only_passed=True,
+                    limit=limit,
+                )
+            )
         if parents:
             effective_config = replace(
                 effective_config,
@@ -210,10 +249,19 @@ def run_snapshot_deep_diagnostics(
     auxiliary_feature_names: tuple[str, ...] | list[str] | None = None,
     auxiliary_max_age_days: int | None = None,
     auxiliary_min_coverage: float = 0.80,
+    deep_feedback_path: str | Path | None = None,
+    research_cycle_id: str | None = None,
 ) -> DeepResearchDiagnostics:
-    """Run holdout-safe deep diagnostics with exact feature replay."""
+    """Run holdout-safe deep diagnostics with exact feature replay.
 
-    return run_deep_research_diagnostics(
+    When deep feedback is enabled, findings are appended only after the deep diagnostic
+    pipeline has received development bars. That pipeline separately strips its blind
+    holdout before any expensive subresearch, so persisted findings remain development-
+    only evidence and are unavailable to the same research cycle.
+    """
+
+    _validate_deep_feedback_runtime(deep_feedback_path, research_cycle_id)
+    diagnostics = run_deep_research_diagnostics(
         _development_bars(snapshot, quarantine_config, quarantine_manifest_path),
         _snapshot_metadata(snapshot, quality_report),
         report,
@@ -228,3 +276,11 @@ def run_snapshot_deep_diagnostics(
         auxiliary_max_age_days=auxiliary_max_age_days,
         auxiliary_min_coverage=auxiliary_min_coverage,
     )
+    if deep_feedback_path is not None and research_cycle_id is not None:
+        JsonlDeepResearchMemory(deep_feedback_path).append_many(
+            make_deep_findings(
+                diagnostics,
+                source_cycle_id=str(research_cycle_id),
+            )
+        )
+    return diagnostics
