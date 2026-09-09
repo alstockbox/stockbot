@@ -49,16 +49,17 @@ def _candidate():
 
 
 def _report(candidate):
+    has_candidate = candidate is not None
     return SimpleNamespace(
         experiments_run=1,
-        candidates_passed=1,
-        holdout_evaluated=1,
-        promotion_occurred=True,
+        candidates_passed=1 if has_candidate else 0,
+        holdout_evaluated=1 if has_candidate else 0,
+        promotion_occurred=has_candidate,
         champion_candidate=candidate,
         active_champion=None,
         ensemble_report=None,
         holdout_start=None,
-        candidates=(candidate,),
+        candidates=(candidate,) if has_candidate else (),
     )
 
 
