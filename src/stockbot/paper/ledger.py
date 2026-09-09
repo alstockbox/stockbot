@@ -9,7 +9,11 @@ import os
 from pathlib import Path
 from typing import Any
 
-from stockbot.paper.locking import exclusive_paper_ledger_write_lock, paper_ledger_write_lock_path
+from stockbot.paper.locking import (
+    exclusive_paper_ledger_write_lock,
+    paper_ledger_write_lock_path,
+    shared_paper_ledger_read_lock,
+)
 
 
 _LEDGER_SCHEMA_VERSION = 2
@@ -128,8 +132,9 @@ class PaperTradingLedger:
     appending data without committing a matching checkpoint fails closed on verification.
 
     Verify + chronology check + duplicate-check + append + checkpoint commit is serialized
-    by a per-ledger OS writer lock. Each strategy's realization timestamps must advance
-    strictly forward.
+    by a per-ledger OS writer lock. Public verified reads wait on a shared lock so they see
+    either the previous committed state or the fully committed ledger+checkpoint pair.
+    Each strategy's realization timestamps must advance strictly forward.
     """
 
     def __init__(self, path: str | Path) -> None:
@@ -311,7 +316,9 @@ class PaperTradingLedger:
             )
 
     def records(self, *, strategy_id: str | None = None) -> list[PaperObservation]:
-        rows, _ = self._read_verified()
+        lock_path = paper_ledger_write_lock_path(self.path)
+        with shared_paper_ledger_read_lock(lock_path):
+            rows, _ = self._read_verified()
         if strategy_id is not None:
             rows = [row for row in rows if row.strategy_id == strategy_id]
         rows.sort(key=lambda row: row.timestamp)
