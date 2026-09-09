@@ -9,7 +9,7 @@ from stockbot.data.schemas import DataGrade
 from stockbot.paper.arena import PaperArenaReport
 from stockbot.research.deep_feedback import build_research_cycle_id
 from stockbot.research.jobs import make_job_manifest
-from stockbot.research.quarantine_audit import QuarantineAuditResult
+from stockbot.research.quarantine_audit import QuarantineAuditRecord, QuarantineAuditResult
 
 
 @dataclass(frozen=True)
@@ -209,6 +209,20 @@ def _external_paper_provenance_complete(report: object | None) -> bool:
     return provenance_reasons is not None and not tuple(provenance_reasons)
 
 
+def _quarantine_audit_passed(
+    quarantine_audit: QuarantineAuditResult | None,
+    quarantine_audit_record: QuarantineAuditRecord | None,
+) -> bool:
+    if quarantine_audit is not None and quarantine_audit_record is not None:
+        raise ValueError("provide exactly one quarantine audit evidence source, not both")
+    if quarantine_audit_record is not None:
+        return bool(getattr(quarantine_audit_record, "passed", False))
+    if quarantine_audit is None:
+        return False
+    holdout_report = getattr(quarantine_audit, "holdout_report", None)
+    return holdout_report is not None and bool(getattr(holdout_report, "passed", False))
+
+
 def evaluate_deployment_evidence(
     *,
     research_ready: bool,
@@ -216,6 +230,7 @@ def evaluate_deployment_evidence(
     quarantine_audit: QuarantineAuditResult | None,
     paper_report: PaperArenaReport | None,
     paper_provenance_report: object | None = None,
+    quarantine_audit_record: QuarantineAuditRecord | None = None,
 ) -> DeploymentEvidenceReport:
     """Combine independent evidence layers without granting execution authority.
 
@@ -228,7 +243,7 @@ def evaluate_deployment_evidence(
     """
 
     research_grade = data_grade is DataGrade.RESEARCH_GRADE
-    audit_passed = quarantine_audit is not None and quarantine_audit.holdout_report.passed
+    audit_passed = _quarantine_audit_passed(quarantine_audit, quarantine_audit_record)
     paper_eligible = paper_report is not None and bool(paper_report.live_eligible)
     paper_provenance = paper_report is not None and bool(
         getattr(paper_report, "frozen_provenance_complete", False)
