@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import stockbot.cli.paper_arena as paper_cli
@@ -130,6 +131,7 @@ def test_paper_status_requires_verified_frozen_provenance(monkeypatch, tmp_path,
         return SimpleNamespace(
             verified=True,
             snapshots_verified=2,
+            snapshot_fingerprints=("snapshot-a", "snapshot-b"),
             model_artifact_id="artifact-status",
             research_cycle_id="cycle-status",
             broker_execution_available=False,
@@ -146,6 +148,7 @@ def test_paper_status_requires_verified_frozen_provenance(monkeypatch, tmp_path,
 
     artifact_dir = tmp_path / "artifact"
     snapshot_root = tmp_path / "snapshots"
+    status_report = tmp_path / "reports" / "paper-status.json"
     args = build_parser().parse_args(
         [
             "--ledger", str(tmp_path / "paper.jsonl"),
@@ -153,6 +156,7 @@ def test_paper_status_requires_verified_frozen_provenance(monkeypatch, tmp_path,
             "--strategy-id", "strategy-status",
             "--artifact", str(artifact_dir),
             "--snapshot-root", str(snapshot_root),
+            "--report", str(status_report),
             "--min-sessions", "1",
             "--min-span-days", "1",
         ]
@@ -168,3 +172,18 @@ def test_paper_status_requires_verified_frozen_provenance(monkeypatch, tmp_path,
     assert "external_provenance_verified=yes" in output
     assert "verified_snapshots=2" in output
     assert "live_evidence_eligible=no" in output
+
+    payload = json.loads(status_report.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 1
+    assert payload["status"] == "ok"
+    assert payload["strategy_id"] == "strategy-status"
+    assert payload["sessions"] == 1
+    assert payload["frozen_provenance_complete"] is True
+    assert payload["external_provenance_verified"] is True
+    assert payload["verified_snapshots"] == 2
+    assert payload["snapshot_fingerprints"] == ["snapshot-a", "snapshot-b"]
+    assert payload["model_artifact_id"] == "artifact-status"
+    assert payload["research_cycle_id"] == "cycle-status"
+    assert payload["live_evidence_eligible"] is False
+    assert payload["reasons"] == ["insufficient_paper_calendar_span"]
+    assert payload["broker_execution_available"] is False
