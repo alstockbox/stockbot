@@ -34,7 +34,7 @@ def test_paper_ledger_new_rows_are_hash_chained_and_verified(tmp_path):
         ledger.append(row)
 
     payloads = _payloads(path)
-    assert all(payload["__ledger_schema_version"] == 1 for payload in payloads)
+    assert all(payload["__ledger_schema_version"] == 2 for payload in payloads)
     assert payloads[1]["__ledger_previous_hash"] == payloads[0]["__ledger_record_hash"]
     assert payloads[2]["__ledger_previous_hash"] == payloads[1]["__ledger_record_hash"]
     assert ledger.records() == rows
@@ -82,6 +82,7 @@ def test_first_chained_append_anchors_legacy_prefix(tmp_path):
 
     payloads = _payloads(path)
     assert "__ledger_record_hash" not in payloads[0]
+    assert payloads[1]["__ledger_schema_version"] == 2
     assert payloads[1]["__ledger_previous_hash"]
 
     payloads[0]["net_return"] = 0.5
