@@ -14,6 +14,7 @@ from stockbot.data.research_inputs import load_point_in_time_feature_store
 from stockbot.data.snapshots import SnapshotStore
 from stockbot.paper.arena import PaperArenaCriteria, evaluate_paper_track
 from stockbot.paper.ledger import PaperTradingLedger, make_paper_observation
+from stockbot.paper.locking import exclusive_shadow_command_lock, shadow_command_lock_path
 from stockbot.paper.runner import load_frozen_shadow_artifact, run_shadow_step
 
 
@@ -32,6 +33,11 @@ def _add_shadow_step_arguments(parser: argparse.ArgumentParser, *, explicit_snap
     if explicit_snapshot:
         parser.add_argument("--snapshot-id", required=True, help="Immutable StockBot snapshot ID to process")
     parser.add_argument("--state", default="paper_memory/shadow-state.json", help="Atomic frozen-runner state JSON")
+    parser.add_argument(
+        "--lock",
+        default=None,
+        help="Optional exclusive process-lock file; defaults to <state>.lock",
+    )
     parser.add_argument("--data-age-seconds", type=float, default=0.0)
     parser.add_argument("--kill-switch", action="store_true", help="Force the hard risk engine to zero all next targets")
     parser.add_argument("--auxiliary-input", default=None, help="Fingerprint-verified point-in-time auxiliary feature store")
@@ -302,6 +308,24 @@ def _run_shadow_cycle(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_locked_shadow_command(args: argparse.Namespace) -> int:
+    if args.command == "step":
+        snapshot = SnapshotStore(args.snapshot_root).load(args.snapshot_id)
+        return _run_shadow_snapshot(args, snapshot)
+
+    if args.command == "auto-step":
+        artifact = load_frozen_shadow_artifact(args.artifact)
+        snapshot = _select_latest_compatible_snapshot(args.snapshot_root, artifact.symbols)
+        print(f"selected_snapshot_id={snapshot.snapshot_id}")
+        print(f"selected_snapshot_fingerprint={snapshot.manifest.dataset_fingerprint}")
+        return _run_shadow_snapshot(args, snapshot)
+
+    if args.command == "cycle":
+        return _run_shadow_cycle(args)
+
+    raise ValueError(f"unsupported shadow command: {args.command}")
+
+
 def run_from_args(args: argparse.Namespace) -> int:
     ledger = PaperTradingLedger(args.ledger)
     if args.command == "record":
@@ -322,19 +346,10 @@ def run_from_args(args: argparse.Namespace) -> int:
         print("broker_execution=disabled")
         return 0
 
-    if args.command == "step":
-        snapshot = SnapshotStore(args.snapshot_root).load(args.snapshot_id)
-        return _run_shadow_snapshot(args, snapshot)
-
-    if args.command == "auto-step":
-        artifact = load_frozen_shadow_artifact(args.artifact)
-        snapshot = _select_latest_compatible_snapshot(args.snapshot_root, artifact.symbols)
-        print(f"selected_snapshot_id={snapshot.snapshot_id}")
-        print(f"selected_snapshot_fingerprint={snapshot.manifest.dataset_fingerprint}")
-        return _run_shadow_snapshot(args, snapshot)
-
-    if args.command == "cycle":
-        return _run_shadow_cycle(args)
+    if args.command in {"step", "auto-step", "cycle"}:
+        lock_path = shadow_command_lock_path(args.state, getattr(args, "lock", None))
+        with exclusive_shadow_command_lock(lock_path):
+            return _run_locked_shadow_command(args)
 
     if args.command == "status":
         records = ledger.records(strategy_id=args.strategy_id)
