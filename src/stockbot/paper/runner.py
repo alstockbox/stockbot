@@ -293,6 +293,23 @@ def _save_state(path: Path, state: PaperRunnerState) -> None:
     _write_json_atomic(path, asdict(state))
 
 
+def _append_or_verify_observation(
+    ledger: PaperTradingLedger,
+    observation: PaperObservation,
+) -> PaperObservation:
+    existing = [
+        row
+        for row in ledger.records(strategy_id=observation.strategy_id)
+        if row.timestamp == observation.timestamp
+    ]
+    if not existing:
+        ledger.append(observation)
+        return observation
+    if len(existing) != 1 or existing[0] != observation:
+        raise ValueError("existing paper observation conflicts with recovered shadow settlement")
+    return existing[0]
+
+
 def _paper_risk_state(
     ledger: PaperTradingLedger,
     strategy_id: str,
@@ -502,8 +519,24 @@ def run_shadow_step(
         auxiliary_max_age_days=auxiliary_max_age_days,
         auxiliary_min_coverage=auxiliary_min_coverage,
     )
-    if state.last_processed_timestamp is not None and latest_timestamp <= pd.Timestamp(state.last_processed_timestamp):
-        raise ValueError("shadow step requires a new market timestamp")
+    if state.last_processed_timestamp is not None:
+        processed_timestamp = pd.Timestamp(state.last_processed_timestamp)
+        if latest_timestamp < processed_timestamp:
+            raise ValueError("shadow step cannot move market timestamp backwards")
+        if latest_timestamp == processed_timestamp:
+            if state.pending_signal_snapshot_fingerprint != snapshot_id:
+                raise ValueError("shadow snapshot fingerprint changed for already processed market timestamp")
+            if state.pending_signal_timestamp != state.last_processed_timestamp:
+                raise ValueError("paper runner state is inconsistent for idempotent replay")
+            return ShadowStepResult(
+                strategy_id=manifest.strategy_id,
+                artifact_id=manifest.artifact_id,
+                processed_timestamp=state.last_processed_timestamp,
+                pending_signal_timestamp=state.pending_signal_timestamp,
+                target_weights=dict(state.pending_target_weights),
+                observation=None,
+                broker_execution_available=False,
+            )
 
     observation: PaperObservation | None = None
     current_weights = dict(state.current_weights)
@@ -517,7 +550,7 @@ def run_shadow_step(
             realization_timestamp=latest_timestamp,
             realization_snapshot_fingerprint=snapshot_id,
         )
-        ledger.append(observation)
+        observation = _append_or_verify_observation(ledger, observation)
 
     signal_weights = _signal_weights(predictions, manifest.top_fraction, manifest.weighting)
     target_row = (
