@@ -28,6 +28,12 @@ def test_provider_smoke_workflow_is_separate_safe_and_reported():
     assert "Probe Riksbank httpx transport" in text
     assert "import httpx" in text
     assert "riksbank-httpx-status.txt" in text
+    assert "Probe Riksbank policy-round catalogue" in text
+    assert "https://api.riksbank.se/monetary_policy_data/v1/forecasts/policy_rounds" in text
+    assert "riksbank-policy-rounds-status.txt" in text
+    assert "Probe Riksbank series catalogue" in text
+    assert "https://api.riksbank.se/monetary_policy_data/v1/forecasts/series_ids" in text
+    assert "riksbank-series-ids-status.txt" in text
     assert "python -m stockbot.cli.riksbank_macro" in text
     assert "--series policy_rate" in text
     assert "Probe external Riksbank default forecast" in text
@@ -42,6 +48,8 @@ def test_provider_smoke_workflow_is_separate_safe_and_reported():
     assert "riksbank-user-agent-status.txt" in text
     assert "riksbank-provider-headers-status.txt" in text
     assert "riksbank-httpx-status.txt" in text
+    assert "riksbank-policy-rounds-status.txt" in text
+    assert "riksbank-series-ids-status.txt" in text
     assert "riksbank-default-smoke.json" in text
     assert "riksbank-explicit-round-smoke.json" in text
     assert "riksbank-smoke.json" in text
