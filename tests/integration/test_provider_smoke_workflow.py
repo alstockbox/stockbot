@@ -13,5 +13,10 @@ def test_provider_smoke_workflow_is_separate_safe_and_reported():
     assert "python -m stockbot.cli.provider_smoke" in text
     assert "--report provider-smoke.json" in text
     assert "TIINGO_API_TOKEN: ${{ secrets.TIINGO_API_TOKEN }}" in text
+    assert "python -m stockbot.cli.riksbank_macro" in text
+    assert "--series policy_rate" in text
+    assert "--policy-round latest" in text
+    assert "--output riksbank-smoke.json" in text
     assert "actions/upload-artifact@v4" in text
+    assert "riksbank-smoke.json" in text
     assert "BROKER" not in text.upper()
