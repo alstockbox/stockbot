@@ -18,7 +18,9 @@ class HttpTransport:
         try:
             with urlopen(request, timeout=self.timeout) as response:
                 payload = response.read().decode("utf-8")
-        except (HTTPError, URLError, TimeoutError) as exc:
+        except HTTPError as exc:
+            raise ProviderError(f"market data request failed: HTTP {exc.code}") from exc
+        except (URLError, TimeoutError) as exc:
             raise ProviderError(f"market data request failed: {type(exc).__name__}") from exc
         try:
             return json.loads(payload)
