@@ -17,12 +17,14 @@ def test_provider_smoke_workflow_is_separate_safe_and_reported():
     assert "curl -sS" in text
     assert "https://api.riksbank.se/monetary_policy_data/v1/forecasts?series=SEQRATENAYNA" in text
     assert "riksbank-http-status.txt" in text
-    assert "Probe Riksbank Python urllib user agent" in text
-    assert "Python-urllib/3.11" in text
-    assert "riksbank-python-ua-status.txt" in text
+    assert "Probe Riksbank Accept header" in text
+    assert "Accept: application/json" in text
+    assert "riksbank-accept-status.txt" in text
     assert "Probe Riksbank StockBot user agent" in text
-    assert "StockBot/0.1" in text
-    assert "riksbank-stockbot-ua-status.txt" in text
+    assert "StockBot/2" in text
+    assert "riksbank-user-agent-status.txt" in text
+    assert "Probe Riksbank provider headers" in text
+    assert "riksbank-provider-headers-status.txt" in text
     assert "python -m stockbot.cli.riksbank_macro" in text
     assert "--series policy_rate" in text
     assert "Probe external Riksbank default forecast" in text
@@ -33,8 +35,9 @@ def test_provider_smoke_workflow_is_separate_safe_and_reported():
     assert "--output riksbank-smoke.json" in text
     assert "actions/upload-artifact@v4" in text
     assert "riksbank-http-status.txt" in text
-    assert "riksbank-python-ua-status.txt" in text
-    assert "riksbank-stockbot-ua-status.txt" in text
+    assert "riksbank-accept-status.txt" in text
+    assert "riksbank-user-agent-status.txt" in text
+    assert "riksbank-provider-headers-status.txt" in text
     assert "riksbank-default-smoke.json" in text
     assert "riksbank-explicit-round-smoke.json" in text
     assert "riksbank-smoke.json" in text
