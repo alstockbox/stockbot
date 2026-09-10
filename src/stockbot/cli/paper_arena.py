@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -433,7 +434,7 @@ def _successful_quarantine_audit_report(artifact, research, snapshot, result) ->
 def _successful_deployment_review_report(artifact, research, audit, paper_report, provenance_report, review) -> dict:
     if bool(getattr(review, "broker_execution_available", False)):
         raise ValueError("deployment review may not enable broker execution")
-    return {
+    report = {
         "schema_version": 1,
         "status": "ok",
         "strategy_id": str(artifact.strategy_id),
@@ -469,6 +470,9 @@ def _successful_deployment_review_report(artifact, research, audit, paper_report
         "reasons": list(review.reasons),
         "broker_execution_available": False,
     }
+    identity = json.dumps(report, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    report["review_id"] = hashlib.sha256(identity).hexdigest()
+    return report
 
 
 def _run_shadow_cycle(args: argparse.Namespace) -> int:
