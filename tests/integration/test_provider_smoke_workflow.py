@@ -13,6 +13,10 @@ def test_provider_smoke_workflow_is_separate_safe_and_reported():
     assert "python -m stockbot.cli.provider_smoke" in text
     assert "--report provider-smoke.json" in text
     assert "TIINGO_API_TOKEN: ${{ secrets.TIINGO_API_TOKEN }}" in text
+    assert "Probe raw Riksbank HTTP endpoint" in text
+    assert "curl -sS" in text
+    assert "https://api.riksbank.se/monetary_policy_data/v1/forecasts?series=SEQRATENAYNA" in text
+    assert "riksbank-http-status.txt" in text
     assert "python -m stockbot.cli.riksbank_macro" in text
     assert "--series policy_rate" in text
     assert "Probe external Riksbank default forecast" in text
@@ -22,6 +26,7 @@ def test_provider_smoke_workflow_is_separate_safe_and_reported():
     assert "--policy-round latest" in text
     assert "--output riksbank-smoke.json" in text
     assert "actions/upload-artifact@v4" in text
+    assert "riksbank-http-status.txt" in text
     assert "riksbank-default-smoke.json" in text
     assert "riksbank-explicit-round-smoke.json" in text
     assert "riksbank-smoke.json" in text
