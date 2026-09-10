@@ -1,0 +1,47 @@
+name: StockBot Provider Smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * 1-5"
+  pull_request:
+    paths:
+      - ".github/workflows/provider-smoke.yml"
+      - "src/stockbot/cli/provider_smoke.py"
+      - "src/stockbot/data/providers/**"
+      - "tests/integration/test_provider_smoke_cli.py"
+      - "tests/integration/test_provider_smoke_workflow.py"
+
+permissions:
+  contents: read
+
+jobs:
+  provider-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        run: python -m pip install -e .
+      - name: Run external provider smoke
+        env:
+          TIINGO_API_TOKEN: ${{ secrets.TIINGO_API_TOKEN }}
+        run: |
+          END="$(date -u +%F)"
+          START="$(date -u -d '14 days ago' +%F)"
+          python -m stockbot.cli.provider_smoke \
+            --symbol AAPL \
+            --start "$START" \
+            --end "$END" \
+            --report provider-smoke.json
+      - name: Upload provider smoke report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: provider-smoke-report
+          path: provider-smoke.json
+          if-no-files-found: warn
