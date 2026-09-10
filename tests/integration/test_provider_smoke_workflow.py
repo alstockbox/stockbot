@@ -1,0 +1,17 @@
+from pathlib import Path
+
+
+def test_provider_smoke_workflow_is_separate_safe_and_reported():
+    workflow = Path(".github/workflows/provider-smoke.yml")
+    assert workflow.exists(), "external provider smoke workflow is missing"
+
+    text = workflow.read_text(encoding="utf-8")
+    assert "name: StockBot Provider Smoke" in text
+    assert "workflow_dispatch:" in text
+    assert "schedule:" in text
+    assert "pull_request:" in text
+    assert "python -m stockbot.cli.provider_smoke" in text
+    assert "--report provider-smoke.json" in text
+    assert "TIINGO_API_TOKEN: ${{ secrets.TIINGO_API_TOKEN }}" in text
+    assert "actions/upload-artifact@v4" in text
+    assert "BROKER" not in text.upper()
