@@ -28,20 +28,43 @@ class _VintageTransport:
             }
 
         query = parse_qs(urlparse(url).query)
-        round_name = query["policy_round_name"][0]
-        if round_name == "2021:1":
-            return {
-                "cutoffDate": "2021-02-10T08:00:00+01:00",
-                "policyRoundName": round_name,
-                "data": [{"date": "2020-10-01", "value": 0.25}],
-            }
-        if round_name == "2021:2":
-            return {
-                "cutoffDate": "2021-04-26T08:00:00+02:00",
-                "policyRoundName": round_name,
-                "data": [{"date": "2020-10-01", "value": 0.50}],
-            }
-        raise AssertionError(f"unexpected round request: {round_name}")
+        assert query == {"series": ["SEQRATENAYNA"]}, (
+            "historical vintage collection must fetch the series once without "
+            "a policy-round query filter"
+        )
+        return {
+            "data": [
+                {
+                    "external_id": "SEQRATENAYNA",
+                    "vintages": [
+                        {
+                            "metadata": {
+                                "forecast_cutoff_date": "2020-11-26",
+                                "policy_round": "2020:4",
+                                "policy_round_end_dtm": "2020-11-26",
+                            },
+                            "observations": [{"dt": "2020-10-01", "value": 0.10}],
+                        },
+                        {
+                            "metadata": {
+                                "forecast_cutoff_date": "2021-02-10",
+                                "policy_round": "2021:1",
+                                "policy_round_end_dtm": "2021-02-10",
+                            },
+                            "observations": [{"dt": "2020-10-01", "value": 0.25}],
+                        },
+                        {
+                            "metadata": {
+                                "forecast_cutoff_date": "2021-04-26",
+                                "policy_round": "2021:2",
+                                "policy_round_end_dtm": "2021-04-26",
+                            },
+                            "observations": [{"dt": "2020-10-01", "value": 0.50}],
+                        },
+                    ],
+                }
+            ]
+        }
 
 
 def test_policy_round_parser_is_strict_deduplicated_and_chronological():
@@ -88,6 +111,5 @@ def test_vintage_store_replays_revision_only_after_later_cutoff():
     assert store.manifest.revision_aware is True
 
     series_calls = [url for url in transport.calls if "series=SEQRATENAYNA" in url]
-    assert len(series_calls) == 2
-    assert any("policy_round_name=2021%3A1" in url for url in series_calls)
-    assert any("policy_round_name=2021%3A2" in url for url in series_calls)
+    assert len(series_calls) == 1
+    assert "policy_round_name" not in series_calls[0]
