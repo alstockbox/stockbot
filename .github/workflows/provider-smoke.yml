@@ -1,0 +1,173 @@
+name: StockBot Provider Smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * 1-5"
+  pull_request:
+    paths:
+      - ".github/workflows/provider-smoke.yml"
+      - "src/stockbot/cli/provider_smoke.py"
+      - "src/stockbot/cli/riksbank_macro.py"
+      - "src/stockbot/data/providers/**"
+      - "tests/integration/test_provider_smoke_cli.py"
+      - "tests/integration/test_provider_smoke_workflow.py"
+
+permissions:
+  contents: read
+
+jobs:
+  provider-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        run: python -m pip install -e .
+      - name: Run external market-data smoke
+        env:
+          TIINGO_API_TOKEN: ${{ secrets.TIINGO_API_TOKEN }}
+        run: |
+          END="$(date -u +%F)"
+          START="$(date -u -d '14 days ago' +%F)"
+          python -m stockbot.cli.provider_smoke \
+            --symbol AAPL \
+            --start "$START" \
+            --end "$END" \
+            --report provider-smoke.json
+      - name: Probe raw Riksbank HTTP endpoint
+        run: |
+          STATUS="$(curl -sS \
+            -o riksbank-http-body.json \
+            -w '%{http_code}' \
+            'https://api.riksbank.se/monetary_policy_data/v1/forecasts?series=SEQRATENAYNA')"
+          printf '%s\n' "$STATUS" > riksbank-http-status.txt
+          echo "riksbank_raw_http_status=$STATUS"
+      - name: Probe Riksbank Accept header
+        run: |
+          STATUS="$(curl -sS \
+            -H 'Accept: application/json' \
+            -o /dev/null \
+            -w '%{http_code}' \
+            'https://api.riksbank.se/monetary_policy_data/v1/forecasts?series=SEQRATENAYNA')"
+          printf '%s\n' "$STATUS" > riksbank-accept-status.txt
+          echo "riksbank_accept_status=$STATUS"
+      - name: Probe Riksbank StockBot user agent
+        run: |
+          STATUS="$(curl -sS \
+            -A 'StockBot/2' \
+            -o /dev/null \
+            -w '%{http_code}' \
+            'https://api.riksbank.se/monetary_policy_data/v1/forecasts?series=SEQRATENAYNA')"
+          printf '%s\n' "$STATUS" > riksbank-user-agent-status.txt
+          echo "riksbank_user_agent_status=$STATUS"
+      - name: Probe Riksbank provider headers
+        run: |
+          STATUS="$(curl -sS \
+            -A 'StockBot/2' \
+            -H 'Accept: application/json' \
+            -o /dev/null \
+            -w '%{http_code}' \
+            'https://api.riksbank.se/monetary_policy_data/v1/forecasts?series=SEQRATENAYNA')"
+          printf '%s\n' "$STATUS" > riksbank-provider-headers-status.txt
+          echo "riksbank_provider_headers_status=$STATUS"
+      - name: Probe Riksbank httpx transport
+        run: |
+          python -m pip install 'httpx>=0.27,<1'
+          python - <<'PY'
+          from pathlib import Path
+          import httpx
+
+          url = "https://api.riksbank.se/monetary_policy_data/v1/forecasts?series=SEQRATENAYNA"
+          headers = {"Accept": "application/json", "User-Agent": "StockBot/2"}
+          try:
+              with httpx.Client(timeout=30.0) as client:
+                  response = client.get(url, headers=headers)
+              status = str(response.status_code)
+          except Exception as exc:
+              status = f"error:{type(exc).__name__}"
+          Path("riksbank-httpx-status.txt").write_text(status + "\n", encoding="utf-8")
+          print(f"riksbank_httpx_status={status}")
+          PY
+      - name: Probe Riksbank policy-round catalogue
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import httpx
+
+          url = "https://api.riksbank.se/monetary_policy_data/v1/forecasts/policy_rounds"
+          headers = {"Accept": "application/json", "User-Agent": "StockBot/2"}
+          try:
+              with httpx.Client(timeout=30.0) as client:
+                  response = client.get(url, headers=headers)
+              status = str(response.status_code)
+          except Exception as exc:
+              status = f"error:{type(exc).__name__}"
+          Path("riksbank-policy-rounds-status.txt").write_text(status + "\n", encoding="utf-8")
+          print(f"riksbank_policy_rounds_status={status}")
+          PY
+      - name: Probe Riksbank series catalogue
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import httpx
+
+          url = "https://api.riksbank.se/monetary_policy_data/v1/forecasts/series_ids"
+          headers = {"Accept": "application/json", "User-Agent": "StockBot/2"}
+          try:
+              with httpx.Client(timeout=30.0) as client:
+                  response = client.get(url, headers=headers)
+              status = str(response.status_code)
+          except Exception as exc:
+              status = f"error:{type(exc).__name__}"
+          Path("riksbank-series-ids-status.txt").write_text(status + "\n", encoding="utf-8")
+          print(f"riksbank_series_ids_status={status}")
+          PY
+      - name: Probe external Riksbank default forecast
+        run: |
+          python -m stockbot.cli.riksbank_macro \
+            --series policy_rate \
+            --output riksbank-default-smoke.json
+      - name: Probe external Riksbank explicit forecast round
+        run: |
+          python -m stockbot.cli.riksbank_macro \
+            --series policy_rate \
+            --policy-round 2026:2 \
+            --output riksbank-explicit-round-smoke.json
+      - name: Run external Riksbank macro smoke
+        run: |
+          python -m stockbot.cli.riksbank_macro \
+            --series policy_rate \
+            --policy-round latest \
+            --output riksbank-smoke.json
+      - name: Probe external Riksbank forecast features
+        run: |
+          python -m stockbot.cli.riksbank_macro \
+            --series policy_rate \
+            --policy-round latest \
+            --include-forecasts \
+            --output riksbank-forecast-smoke.json
+      - name: Upload provider smoke report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: provider-smoke-report
+          path: |
+            provider-smoke.json
+            riksbank-http-status.txt
+            riksbank-http-body.json
+            riksbank-accept-status.txt
+            riksbank-user-agent-status.txt
+            riksbank-provider-headers-status.txt
+            riksbank-httpx-status.txt
+            riksbank-policy-rounds-status.txt
+            riksbank-series-ids-status.txt
+            riksbank-default-smoke.json
+            riksbank-explicit-round-smoke.json
+            riksbank-smoke.json
+            riksbank-forecast-smoke.json
+          if-no-files-found: warn

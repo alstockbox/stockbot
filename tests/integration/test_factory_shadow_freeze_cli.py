@@ -1,0 +1,252 @@
+import hashlib
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import pandas as pd
+
+import stockbot.cli.market_training as market_cli
+from stockbot.data.schemas import DataGrade
+
+
+def _snapshot(tmp_path):
+    return SimpleNamespace(
+        snapshot_id="snapshot-shadow-freeze",
+        path=tmp_path / "snapshot-shadow-freeze",
+        bars=pd.DataFrame({"fixture": [1]}),
+        manifest=SimpleNamespace(
+            provider="fixture",
+            grade=DataGrade.BOOTSTRAP,
+            symbols=("AAA", "BBB"),
+            row_count=2,
+            dataset_fingerprint="dataset-shadow-freeze",
+        ),
+    )
+
+
+def _candidate():
+    artifact = SimpleNamespace(
+        feature_names=("return_1", "momentum_5", "return_1_rank"),
+    )
+    result = SimpleNamespace(artifact=artifact)
+    return SimpleNamespace(
+        experiment_id="exp-shadow-freeze",
+        horizon=5,
+        model_name="ridge",
+        model_params={"alpha": 2.0},
+        seed=11,
+        factory_score=0.72,
+        selection_score=0.71,
+        promotion_score=0.70,
+        oos_coverage=0.90,
+        stress_score=0.80,
+        gate=SimpleNamespace(passed=True),
+        holdout_report=SimpleNamespace(passed=True),
+        discovery=None,
+        regime_report=None,
+        drift_report=None,
+        paper_readiness=SimpleNamespace(
+            ready=True,
+            score=0.91,
+            reasons=(),
+        ),
+        result=result,
+    )
+
+
+def _report(candidate):
+    has_candidate = candidate is not None
+    return SimpleNamespace(
+        experiments_run=1,
+        candidates_passed=1 if has_candidate else 0,
+        holdout_evaluated=1 if has_candidate else 0,
+        promotion_occurred=has_candidate,
+        champion_candidate=candidate,
+        active_champion=None,
+        ensemble_report=None,
+        holdout_start=None,
+        candidates=(candidate,) if has_candidate else (),
+    )
+
+
+def test_factory_cli_auto_freezes_exact_champion_contract(tmp_path, monkeypatch, capsys):
+    snapshot = _snapshot(tmp_path)
+    candidate = _candidate()
+    captured = {}
+
+    monkeypatch.setattr(market_cli, "download_market_snapshot", lambda *args, **kwargs: snapshot)
+    monkeypatch.setattr(market_cli, "run_snapshot_factory", lambda *args, **kwargs: _report(candidate))
+    monkeypatch.setattr(
+        market_cli,
+        "_evaluate_factory_data_quality",
+        lambda *args, **kwargs: (
+            SimpleNamespace(research_grade_eligible=False, reasons=("fixture",)),
+            "quality-shadow-freeze",
+            DataGrade.BOOTSTRAP,
+        ),
+    )
+
+    def fake_freeze(bars, spec, **kwargs):
+        captured["bars"] = bars
+        captured["spec"] = spec
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(
+            artifact_id="artifact-shadow-freeze",
+            strategy_id=spec.strategy_id,
+            broker_execution_available=False,
+        )
+
+    monkeypatch.setattr(market_cli, "freeze_shadow_strategy", fake_freeze, raising=False)
+
+    artifact_dir = tmp_path / "paper" / "artifact"
+    args = market_cli.build_parser().parse_args(
+        [
+            "--provider", "yahoo-bootstrap",
+            "--symbols", "AAA,BBB",
+            "--start", "2025-01-01",
+            "--end", "2026-09-09",
+            "--snapshot-root", str(tmp_path / "snapshots"),
+            "--factory",
+            "--factory-candidates", "1",
+            "--factory-workers", "1",
+            "--factory-freeze-shadow-dir", str(artifact_dir),
+        ]
+    )
+
+    assert market_cli.run_from_args(args) == 0
+    assert captured["bars"] is snapshot.bars
+    spec = captured["spec"]
+    assert spec.experiment_id == "exp-shadow-freeze"
+    assert spec.horizon == 5
+    assert spec.model_name == "ridge"
+    assert spec.model_params == {"alpha": 2.0}
+    assert spec.seed == 11
+    assert spec.top_fraction == 0.30
+    assert spec.weighting == "equal"
+    assert captured["kwargs"]["feature_names"] == candidate.result.artifact.feature_names
+    assert captured["kwargs"]["source_dataset_fingerprint"] == "dataset-shadow-freeze"
+    assert captured["kwargs"]["output_dir"] == artifact_dir
+    assert captured["kwargs"]["research_cycle_id"]
+    readiness_payload = {
+        "ready": True,
+        "score": 0.91,
+        "reasons": [],
+    }
+    readiness_raw = json.dumps(
+        readiness_payload,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    expected_readiness_fingerprint = hashlib.sha256(readiness_raw).hexdigest()
+    assert captured["kwargs"]["research_readiness_fingerprint"] == expected_readiness_fingerprint
+    assert captured["kwargs"]["execution_config"].capital == 100_000.0
+
+    output = capsys.readouterr().out
+    assert "shadow_artifact_id=artifact-shadow-freeze" in output
+    assert "shadow_broker_execution=disabled" in output
+
+
+def test_factory_cli_does_not_freeze_when_no_champion_exists(tmp_path, monkeypatch, capsys):
+    snapshot = _snapshot(tmp_path)
+    monkeypatch.setattr(market_cli, "download_market_snapshot", lambda *args, **kwargs: snapshot)
+    monkeypatch.setattr(market_cli, "run_snapshot_factory", lambda *args, **kwargs: _report(None))
+    monkeypatch.setattr(
+        market_cli,
+        "_evaluate_factory_data_quality",
+        lambda *args, **kwargs: (
+            SimpleNamespace(research_grade_eligible=False, reasons=("fixture",)),
+            "quality-shadow-freeze",
+            DataGrade.BOOTSTRAP,
+        ),
+    )
+
+    called = []
+    monkeypatch.setattr(market_cli, "freeze_shadow_strategy", lambda *args, **kwargs: called.append(True), raising=False)
+
+    args = market_cli.build_parser().parse_args(
+        [
+            "--provider", "yahoo-bootstrap",
+            "--symbols", "AAA,BBB",
+            "--start", "2025-01-01",
+            "--end", "2026-09-09",
+            "--snapshot-root", str(tmp_path / "snapshots"),
+            "--factory",
+            "--factory-candidates", "1",
+            "--factory-workers", "1",
+            "--factory-freeze-shadow-dir", str(tmp_path / "artifact"),
+        ]
+    )
+
+    assert market_cli.run_from_args(args) == 0
+    assert called == []
+    output = capsys.readouterr().out
+    assert "shadow_freeze=skipped_no_champion" in output
+
+
+def test_factory_cli_excludes_sealed_quarantine_from_shadow_freeze(tmp_path, monkeypatch):
+    dates = pd.date_range("2026-01-01", periods=6, freq="D", tz="UTC")
+    bars = pd.DataFrame(
+        {
+            "timestamp": [date for date in dates for _ in (0, 1)],
+            "symbol": [symbol for _ in dates for symbol in ("AAA", "BBB")],
+            "fixture": range(12),
+        }
+    )
+    snapshot = SimpleNamespace(
+        snapshot_id="snapshot-quarantine-freeze",
+        path=tmp_path / "snapshot-quarantine-freeze",
+        bars=bars,
+        manifest=SimpleNamespace(
+            provider="fixture",
+            grade=DataGrade.BOOTSTRAP,
+            symbols=("AAA", "BBB"),
+            row_count=len(bars),
+            dataset_fingerprint="dataset-quarantine-freeze",
+        ),
+    )
+    candidate = _candidate()
+    captured = {}
+
+    monkeypatch.setattr(market_cli, "download_market_snapshot", lambda *args, **kwargs: snapshot)
+    monkeypatch.setattr(market_cli, "run_snapshot_factory", lambda *args, **kwargs: _report(candidate))
+    monkeypatch.setattr(
+        market_cli,
+        "_evaluate_factory_data_quality",
+        lambda *args, **kwargs: (
+            SimpleNamespace(research_grade_eligible=False, reasons=("fixture",)),
+            "quality-quarantine-freeze",
+            DataGrade.BOOTSTRAP,
+        ),
+    )
+
+    def fake_freeze(freeze_bars, spec, **kwargs):
+        captured["bars"] = freeze_bars.copy()
+        return SimpleNamespace(
+            artifact_id="artifact-quarantine-freeze",
+            strategy_id=spec.strategy_id,
+            broker_execution_available=False,
+        )
+
+    monkeypatch.setattr(market_cli, "freeze_shadow_strategy", fake_freeze, raising=False)
+
+    args = market_cli.build_parser().parse_args(
+        [
+            "--provider", "yahoo-bootstrap",
+            "--symbols", "AAA,BBB",
+            "--start", "2026-01-01",
+            "--end", "2026-01-06",
+            "--snapshot-root", str(tmp_path / "snapshots"),
+            "--factory",
+            "--factory-candidates", "1",
+            "--factory-workers", "1",
+            "--factory-quarantine-start", "2026-01-05",
+            "--factory-quarantine-min-development-periods", "2",
+            "--factory-quarantine-min-periods", "2",
+            "--factory-freeze-shadow-dir", str(tmp_path / "artifact"),
+        ]
+    )
+
+    assert market_cli.run_from_args(args) == 0
+    frozen_timestamps = pd.to_datetime(captured["bars"]["timestamp"], utc=True)
+    assert frozen_timestamps.max() < pd.Timestamp("2026-01-05T00:00:00Z")
+    assert len(captured["bars"]) == 8

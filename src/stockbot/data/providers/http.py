@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+import httpx
 
 
 class ProviderError(RuntimeError):
@@ -14,13 +12,18 @@ class HttpTransport:
         self.timeout = float(timeout)
 
     def get_json(self, url: str, headers: dict[str, str] | None = None):
-        request = Request(url, headers=headers or {}, method="GET")
         try:
-            with urlopen(request, timeout=self.timeout) as response:
-                payload = response.read().decode("utf-8")
-        except (HTTPError, URLError, TimeoutError) as exc:
-            raise ProviderError(f"market data request failed: {type(exc).__name__}") from exc
-        try:
-            return json.loads(payload)
-        except json.JSONDecodeError as exc:
+            with httpx.Client(timeout=self.timeout) as client:
+                response = client.get(url, headers=headers or {})
+                response.raise_for_status()
+                return response.json()
+        except httpx.HTTPStatusError as exc:
+            raise ProviderError(
+                f"market data request failed: HTTP {exc.response.status_code}"
+            ) from exc
+        except httpx.RequestError as exc:
+            raise ProviderError(
+                f"market data request failed: {type(exc).__name__}"
+            ) from exc
+        except ValueError as exc:
             raise ProviderError("market data provider returned invalid JSON") from exc

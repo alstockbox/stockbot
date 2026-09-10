@@ -1,11 +1,29 @@
 from __future__ import annotations
 
+from dataclasses import replace
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
 from stockbot.data.market_schema import validate_canonical_bars
+from stockbot.data.point_in_time_features import PointInTimeFeatureStore
+from stockbot.data.research_quality import ResearchDataQualityReport, verified_data_grade
 from stockbot.data.schemas import DatasetMetadata
 from stockbot.data.snapshots import MarketSnapshot
+from stockbot.data.universe import PointInTimeUniverse
+from stockbot.research.champion import JsonChampionStore
+from stockbot.research.deep_diagnostics import DeepResearchDiagnostics, run_deep_research_diagnostics
+from stockbot.research.deep_feedback import (
+    JsonlDeepResearchMemory,
+    make_deep_findings,
+    rank_adaptive_parent_records,
+)
+from stockbot.research.factory import FactoryReport, ResearchFactory, ResearchFactoryConfig
+from stockbot.research.liquidity_execution import LiquidityExecutionConfig
+from stockbot.research.memory import JsonlExperimentMemory
+from stockbot.research.quarantine import QuarantineConfig, persist_sealed_quarantine, split_sealed_quarantine
+from stockbot.research.specialist_pipeline import RegimeSpecialistDiagnostics, run_regime_specialist_diagnostics
 from stockbot.research.training_pipeline import TrainingRun, run_training_research
 
 
@@ -36,21 +54,233 @@ def prepare_training_bars(canonical_bars: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+def _snapshot_metadata(
+    snapshot: MarketSnapshot,
+    quality_report: ResearchDataQualityReport | None = None,
+) -> DatasetMetadata:
+    """Create training metadata with fail-closed research-grade verification."""
+
+    return DatasetMetadata(
+        name=snapshot.snapshot_id,
+        source=snapshot.manifest.provider,
+        grade=verified_data_grade(snapshot.manifest.grade, quality_report),
+        version=snapshot.manifest.schema_version,
+        created_at=snapshot.manifest.created_at,
+    )
+
+
+def _development_bars(
+    snapshot: MarketSnapshot,
+    quarantine_config: QuarantineConfig | None,
+    quarantine_manifest_path: str | Path | None = None,
+) -> pd.DataFrame:
+    bars = prepare_training_bars(snapshot.bars)
+    if quarantine_config is None:
+        return bars
+    split = split_sealed_quarantine(bars, quarantine_config)
+    if quarantine_manifest_path is not None:
+        persist_sealed_quarantine(quarantine_manifest_path, split, quarantine_config)
+    return split.development_bars
+
+
+def _validate_deep_feedback_runtime(
+    deep_feedback_path: str | Path | None,
+    research_cycle_id: str | None,
+) -> None:
+    path_supplied = deep_feedback_path is not None
+    cycle_supplied = research_cycle_id is not None and bool(str(research_cycle_id).strip())
+    if path_supplied != cycle_supplied:
+        raise ValueError("deep feedback requires both deep_feedback_path and research_cycle_id")
+
+
 def train_snapshot(
     snapshot: MarketSnapshot,
     model_configs=None,
     horizon: int = 5,
+    *,
+    quarantine_config: QuarantineConfig | None = None,
+    quarantine_manifest_path: str | Path | None = None,
+    quality_report: ResearchDataQualityReport | None = None,
+    auxiliary_store: PointInTimeFeatureStore | None = None,
+    auxiliary_feature_names: tuple[str, ...] | list[str] | None = None,
+    auxiliary_max_age_days: int | None = None,
+    auxiliary_min_coverage: float = 0.80,
 ) -> TrainingRun:
-    metadata = DatasetMetadata(
-        name=snapshot.snapshot_id,
-        source=snapshot.manifest.provider,
-        grade=snapshot.manifest.grade,
-        version=snapshot.manifest.schema_version,
-        created_at=snapshot.manifest.created_at,
-    )
     return run_training_research(
-        prepare_training_bars(snapshot.bars),
-        metadata,
+        _development_bars(snapshot, quarantine_config, quarantine_manifest_path),
+        _snapshot_metadata(snapshot, quality_report),
         model_configs=model_configs,
         horizon=horizon,
+        auxiliary_store=auxiliary_store,
+        auxiliary_feature_names=auxiliary_feature_names,
+        auxiliary_max_age_days=auxiliary_max_age_days,
+        auxiliary_min_coverage=auxiliary_min_coverage,
     )
+
+
+def run_snapshot_factory(
+    snapshot: MarketSnapshot,
+    *,
+    config: ResearchFactoryConfig | None = None,
+    memory_path: str | None = None,
+    quarantine_config: QuarantineConfig | None = None,
+    quarantine_manifest_path: str | Path | None = None,
+    quality_report: ResearchDataQualityReport | None = None,
+    auxiliary_store: PointInTimeFeatureStore | None = None,
+    auxiliary_feature_names: tuple[str, ...] | list[str] | None = None,
+    auxiliary_max_age_days: int | None = None,
+    auxiliary_min_coverage: float = 0.80,
+    deep_feedback_path: str | Path | None = None,
+    research_cycle_id: str | None = None,
+    deep_feedback_weight: float = 0.25,
+) -> FactoryReport:
+    """Run V2 on development data only with verified data and feature semantics.
+
+    Optional deep feedback may only influence which already-passed historical
+    experiments receive future mutation budget. Same-cycle findings are ignored by
+    construction and cannot alter gates, holdout scores or promotion eligibility.
+    """
+
+    _validate_deep_feedback_runtime(deep_feedback_path, research_cycle_id)
+
+    memory = JsonlExperimentMemory(memory_path) if memory_path else None
+    champion_store = None
+    if memory_path:
+        memory_file = Path(memory_path)
+        champion_store = JsonChampionStore(memory_file.with_suffix(".champion.json"))
+
+    effective_config = config or ResearchFactoryConfig()
+    if memory is not None and not effective_config.population.adaptive_records:
+        limit = effective_config.population.adaptive_parent_limit
+        if deep_feedback_path is not None and research_cycle_id is not None:
+            passed_records = [row for row in memory.records() if row.passed_gates]
+            findings = JsonlDeepResearchMemory(deep_feedback_path).records()
+            parents = tuple(
+                rank_adaptive_parent_records(
+                    passed_records,
+                    findings,
+                    current_cycle_id=str(research_cycle_id),
+                    limit=limit,
+                    feedback_weight=deep_feedback_weight,
+                )
+            )
+        else:
+            parents = tuple(
+                memory.best(
+                    only_passed=True,
+                    limit=limit,
+                )
+            )
+        if parents:
+            effective_config = replace(
+                effective_config,
+                population=replace(
+                    effective_config.population,
+                    adaptive_records=parents,
+                ),
+            )
+
+    factory = ResearchFactory(
+        effective_config,
+        memory=memory,
+        champion_store=champion_store,
+    )
+    return factory.run(
+        _development_bars(snapshot, quarantine_config, quarantine_manifest_path),
+        _snapshot_metadata(snapshot, quality_report),
+        auxiliary_store=auxiliary_store,
+        auxiliary_feature_names=auxiliary_feature_names,
+        auxiliary_max_age_days=auxiliary_max_age_days,
+        auxiliary_min_coverage=auxiliary_min_coverage,
+    )
+
+
+def run_snapshot_regime_specialists(
+    snapshot: MarketSnapshot,
+    report: FactoryReport,
+    *,
+    top_k_per_horizon: int = 2,
+    quarantine_config: QuarantineConfig | None = None,
+    quarantine_manifest_path: str | Path | None = None,
+    quality_report: ResearchDataQualityReport | None = None,
+    auxiliary_store: PointInTimeFeatureStore | None = None,
+    auxiliary_feature_names: tuple[str, ...] | list[str] | None = None,
+    auxiliary_max_age_days: int | None = None,
+    auxiliary_min_coverage: float = 0.80,
+) -> RegimeSpecialistDiagnostics:
+    """Run regime specialists without changing the candidate feature contract."""
+
+    return run_regime_specialist_diagnostics(
+        _development_bars(snapshot, quarantine_config, quarantine_manifest_path),
+        _snapshot_metadata(snapshot, quality_report),
+        report.candidates,
+        top_k_per_horizon=top_k_per_horizon,
+        auxiliary_store=auxiliary_store,
+        auxiliary_feature_names=auxiliary_feature_names,
+        auxiliary_max_age_days=auxiliary_max_age_days,
+        auxiliary_min_coverage=auxiliary_min_coverage,
+    )
+
+
+def run_snapshot_deep_diagnostics(
+    snapshot: MarketSnapshot,
+    report: FactoryReport,
+    *,
+    top_k_per_horizon: int = 1,
+    train_windows: tuple[int, ...] = (126, 252, 504),
+    test_periods: int = 21,
+    liquidity_config: LiquidityExecutionConfig | None = None,
+    capacity_levels: tuple[float, ...] = (
+        10_000.0,
+        25_000.0,
+        50_000.0,
+        100_000.0,
+        250_000.0,
+        500_000.0,
+        1_000_000.0,
+        2_500_000.0,
+        5_000_000.0,
+    ),
+    quarantine_config: QuarantineConfig | None = None,
+    quarantine_manifest_path: str | Path | None = None,
+    quality_report: ResearchDataQualityReport | None = None,
+    point_in_time_universe: PointInTimeUniverse | None = None,
+    auxiliary_store: PointInTimeFeatureStore | None = None,
+    auxiliary_feature_names: tuple[str, ...] | list[str] | None = None,
+    auxiliary_max_age_days: int | None = None,
+    auxiliary_min_coverage: float = 0.80,
+    deep_feedback_path: str | Path | None = None,
+    research_cycle_id: str | None = None,
+) -> DeepResearchDiagnostics:
+    """Run holdout-safe deep diagnostics with exact feature replay.
+
+    When deep feedback is enabled, findings are appended only after the deep diagnostic
+    pipeline has received development bars. That pipeline separately strips its blind
+    holdout before any expensive subresearch, so persisted findings remain development-
+    only evidence and are unavailable to the same research cycle.
+    """
+
+    _validate_deep_feedback_runtime(deep_feedback_path, research_cycle_id)
+    diagnostics = run_deep_research_diagnostics(
+        _development_bars(snapshot, quarantine_config, quarantine_manifest_path),
+        _snapshot_metadata(snapshot, quality_report),
+        report,
+        top_k_per_horizon=top_k_per_horizon,
+        train_windows=train_windows,
+        test_periods=test_periods,
+        liquidity_config=liquidity_config,
+        capacity_levels=capacity_levels,
+        point_in_time_universe=point_in_time_universe,
+        auxiliary_store=auxiliary_store,
+        auxiliary_feature_names=auxiliary_feature_names,
+        auxiliary_max_age_days=auxiliary_max_age_days,
+        auxiliary_min_coverage=auxiliary_min_coverage,
+    )
+    if deep_feedback_path is not None and research_cycle_id is not None:
+        JsonlDeepResearchMemory(deep_feedback_path).append_many(
+            make_deep_findings(
+                diagnostics,
+                source_cycle_id=str(research_cycle_id),
+            )
+        )
+    return diagnostics

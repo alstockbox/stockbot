@@ -34,6 +34,39 @@ def test_download_sorts_deduplicates_universe_and_persists_complete_snapshot(tmp
     assert snapshot.manifest.grade is DataGrade.BOOTSTRAP
 
 
+def test_download_can_reuse_identical_verified_snapshot_without_duplicate_directory(tmp_path):
+    store = SnapshotStore(tmp_path)
+    kwargs = dict(
+        provider=FakeProvider(),
+        symbols=["AAA", "BBB"],
+        start="2026-01-01",
+        end="2026-01-31",
+        store=store,
+        provenance={"purpose": "shadow-cycle"},
+        reuse_identical=True,
+    )
+    first = download_market_snapshot(**kwargs)
+    second = download_market_snapshot(**kwargs)
+
+    assert second.snapshot_id == first.snapshot_id
+    assert second.manifest.dataset_fingerprint == first.manifest.dataset_fingerprint
+    assert [path.name for path in tmp_path.iterdir() if path.is_dir()] == [first.snapshot_id]
+
+
+def test_reuse_identical_does_not_collapse_changed_provenance(tmp_path):
+    store = SnapshotStore(tmp_path)
+    first = download_market_snapshot(
+        FakeProvider(), ["AAA"], "2026-01-01", "2026-01-31", store,
+        provenance={"cycle": "one"}, reuse_identical=True,
+    )
+    second = download_market_snapshot(
+        FakeProvider(), ["AAA"], "2026-01-01", "2026-01-31", store,
+        provenance={"cycle": "two"}, reuse_identical=True,
+    )
+    assert second.snapshot_id != first.snapshot_id
+    assert second.manifest.dataset_fingerprint != first.manifest.dataset_fingerprint
+
+
 def test_download_fails_closed_when_any_requested_symbol_fails(tmp_path):
     store = SnapshotStore(tmp_path)
     with pytest.raises(DownloadError):
