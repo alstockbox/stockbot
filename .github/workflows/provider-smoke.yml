@@ -39,6 +39,14 @@ jobs:
             --start "$START" \
             --end "$END" \
             --report provider-smoke.json
+      - name: Probe raw Riksbank HTTP endpoint
+        run: |
+          STATUS="$(curl -sS \
+            -o riksbank-http-body.json \
+            -w '%{http_code}' \
+            'https://api.riksbank.se/monetary_policy_data/v1/forecasts?series=SEQRATENAYNA')"
+          printf '%s\n' "$STATUS" > riksbank-http-status.txt
+          echo "riksbank_raw_http_status=$STATUS"
       - name: Probe external Riksbank default forecast
         run: |
           python -m stockbot.cli.riksbank_macro \
@@ -63,6 +71,8 @@ jobs:
           name: provider-smoke-report
           path: |
             provider-smoke.json
+            riksbank-http-status.txt
+            riksbank-http-body.json
             riksbank-default-smoke.json
             riksbank-explicit-round-smoke.json
             riksbank-smoke.json
