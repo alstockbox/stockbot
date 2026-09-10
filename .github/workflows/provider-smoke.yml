@@ -39,6 +39,12 @@ jobs:
             --start "$START" \
             --end "$END" \
             --report provider-smoke.json
+      - name: Probe external Riksbank explicit forecast round
+        run: |
+          python -m stockbot.cli.riksbank_macro \
+            --series policy_rate \
+            --policy-round 2026:2 \
+            --output riksbank-explicit-round-smoke.json
       - name: Run external Riksbank macro smoke
         run: |
           python -m stockbot.cli.riksbank_macro \
@@ -52,5 +58,6 @@ jobs:
           name: provider-smoke-report
           path: |
             provider-smoke.json
+            riksbank-explicit-round-smoke.json
             riksbank-smoke.json
           if-no-files-found: warn
