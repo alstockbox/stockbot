@@ -523,29 +523,36 @@ class RiksbankMonetaryPolicyProvider:
         requested = tuple(series)
         if not requested:
             raise ProviderError("at least one Riksbank series is required")
-        rounds = self.policy_round_names(start_year=start_year, end_year=end_year)
+        allowed_rounds = set(self.policy_round_names(start_year=start_year, end_year=end_year))
         observations: list[PointInTimeFeatureObservation] = []
-        for round_name in rounds:
-            for item in requested:
-                payload = self.fetch_series_payload(item.series_id, policy_round=round_name)
+        for item in requested:
+            payload = self.fetch_series_payload(item.series_id)
+            rows, _ = _rows_from_payload(payload)
+            filtered_rows = [
+                row
+                for row in rows
+                if str(_first(row, _ROUND_KEYS) or "").strip() in allowed_rounds
+            ]
+            if not filtered_rows:
+                raise ProviderError("Riksbank payload contained no rows for requested policy rounds")
+            observations.extend(
+                self.observations_from_payload(
+                    filtered_rows,
+                    feature_name=item.feature_name,
+                    series_id=item.series_id,
+                    kind=item.kind,
+                )
+            )
+            if include_forecasts:
                 observations.extend(
-                    self.observations_from_payload(
-                        payload,
+                    self.forecast_observations_from_payload(
+                        filtered_rows,
                         feature_name=item.feature_name,
                         series_id=item.series_id,
                         kind=item.kind,
+                        horizons=forecast_horizons,
                     )
                 )
-                if include_forecasts:
-                    observations.extend(
-                        self.forecast_observations_from_payload(
-                            payload,
-                            feature_name=item.feature_name,
-                            series_id=item.series_id,
-                            kind=item.kind,
-                            horizons=forecast_horizons,
-                        )
-                    )
         return self._store(observations)
 
 
