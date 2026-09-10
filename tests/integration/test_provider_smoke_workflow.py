@@ -42,6 +42,9 @@ def test_provider_smoke_workflow_is_separate_safe_and_reported():
     assert "--output riksbank-explicit-round-smoke.json" in text
     assert "--policy-round latest" in text
     assert "--output riksbank-smoke.json" in text
+    assert "Probe external Riksbank forecast features" in text
+    assert "--include-forecasts" in text
+    assert "--output riksbank-forecast-smoke.json" in text
     assert "actions/upload-artifact@v4" in text
     assert "riksbank-http-status.txt" in text
     assert "riksbank-accept-status.txt" in text
@@ -53,4 +56,5 @@ def test_provider_smoke_workflow_is_separate_safe_and_reported():
     assert "riksbank-default-smoke.json" in text
     assert "riksbank-explicit-round-smoke.json" in text
     assert "riksbank-smoke.json" in text
+    assert "riksbank-forecast-smoke.json" in text
     assert "BROKER" not in text.upper()
