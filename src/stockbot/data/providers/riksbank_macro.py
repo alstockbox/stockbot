@@ -486,12 +486,41 @@ class RiksbankMonetaryPolicyProvider:
         requested = tuple(series)
         if not requested:
             raise ProviderError("at least one Riksbank series is required")
+
+        selected_round = None
+        if policy_round is not None:
+            selected_round = str(policy_round).strip()
+            if _ROUND_PATTERN.fullmatch(selected_round) is None and selected_round != "latest":
+                raise ProviderError("Riksbank policy_round must be YYYY:N or 'latest'")
+            if selected_round == "latest":
+                selected_round = self.policy_round_names()[-1]
+
         observations: list[PointInTimeFeatureObservation] = []
         for item in requested:
-            payload = self.fetch_series_payload(item.series_id, policy_round=policy_round)
+            payload = self.fetch_series_payload(item.series_id)
+            selected_payload = payload
+            if selected_round is not None:
+                rows, metadata = _rows_from_payload(payload)
+                metadata_round = _first(metadata, _ROUND_KEYS)
+                metadata_available = _first(metadata, _AVAILABLE_KEYS)
+                filtered_rows: list[dict] = []
+                for row in rows:
+                    row_round = str(_first(row, _ROUND_KEYS) or metadata_round or "").strip()
+                    if row_round != selected_round:
+                        continue
+                    selected_row = dict(row)
+                    if _first(selected_row, _ROUND_KEYS) is None:
+                        selected_row["policy_round"] = row_round
+                    if _first(selected_row, _AVAILABLE_KEYS) is None and metadata_available is not None:
+                        selected_row["available_time"] = metadata_available
+                    filtered_rows.append(selected_row)
+                if not filtered_rows:
+                    raise ProviderError("Riksbank payload contained no rows for requested policy round")
+                selected_payload = filtered_rows
+
             observations.extend(
                 self.observations_from_payload(
-                    payload,
+                    selected_payload,
                     feature_name=item.feature_name,
                     series_id=item.series_id,
                     kind=item.kind,
@@ -500,7 +529,7 @@ class RiksbankMonetaryPolicyProvider:
             if include_forecasts:
                 observations.extend(
                     self.forecast_observations_from_payload(
-                        payload,
+                        selected_payload,
                         feature_name=item.feature_name,
                         series_id=item.series_id,
                         kind=item.kind,
