@@ -47,6 +47,34 @@ jobs:
             'https://api.riksbank.se/monetary_policy_data/v1/forecasts?series=SEQRATENAYNA')"
           printf '%s\n' "$STATUS" > riksbank-http-status.txt
           echo "riksbank_raw_http_status=$STATUS"
+      - name: Probe Riksbank Accept header
+        run: |
+          STATUS="$(curl -sS \
+            -H 'Accept: application/json' \
+            -o /dev/null \
+            -w '%{http_code}' \
+            'https://api.riksbank.se/monetary_policy_data/v1/forecasts?series=SEQRATENAYNA')"
+          printf '%s\n' "$STATUS" > riksbank-accept-status.txt
+          echo "riksbank_accept_status=$STATUS"
+      - name: Probe Riksbank StockBot user agent
+        run: |
+          STATUS="$(curl -sS \
+            -A 'StockBot/2' \
+            -o /dev/null \
+            -w '%{http_code}' \
+            'https://api.riksbank.se/monetary_policy_data/v1/forecasts?series=SEQRATENAYNA')"
+          printf '%s\n' "$STATUS" > riksbank-user-agent-status.txt
+          echo "riksbank_user_agent_status=$STATUS"
+      - name: Probe Riksbank provider headers
+        run: |
+          STATUS="$(curl -sS \
+            -A 'StockBot/2' \
+            -H 'Accept: application/json' \
+            -o /dev/null \
+            -w '%{http_code}' \
+            'https://api.riksbank.se/monetary_policy_data/v1/forecasts?series=SEQRATENAYNA')"
+          printf '%s\n' "$STATUS" > riksbank-provider-headers-status.txt
+          echo "riksbank_provider_headers_status=$STATUS"
       - name: Probe external Riksbank default forecast
         run: |
           python -m stockbot.cli.riksbank_macro \
@@ -73,6 +101,9 @@ jobs:
             provider-smoke.json
             riksbank-http-status.txt
             riksbank-http-body.json
+            riksbank-accept-status.txt
+            riksbank-user-agent-status.txt
+            riksbank-provider-headers-status.txt
             riksbank-default-smoke.json
             riksbank-explicit-round-smoke.json
             riksbank-smoke.json
