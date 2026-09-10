@@ -144,6 +144,13 @@ jobs:
             --series policy_rate \
             --policy-round latest \
             --output riksbank-smoke.json
+      - name: Probe external Riksbank forecast features
+        run: |
+          python -m stockbot.cli.riksbank_macro \
+            --series policy_rate \
+            --policy-round latest \
+            --include-forecasts \
+            --output riksbank-forecast-smoke.json
       - name: Upload provider smoke report
         if: always()
         uses: actions/upload-artifact@v4
@@ -162,4 +169,5 @@ jobs:
             riksbank-default-smoke.json
             riksbank-explicit-round-smoke.json
             riksbank-smoke.json
+            riksbank-forecast-smoke.json
           if-no-files-found: warn
