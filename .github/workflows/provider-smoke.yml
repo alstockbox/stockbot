@@ -93,6 +93,40 @@ jobs:
           Path("riksbank-httpx-status.txt").write_text(status + "\n", encoding="utf-8")
           print(f"riksbank_httpx_status={status}")
           PY
+      - name: Probe Riksbank policy-round catalogue
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import httpx
+
+          url = "https://api.riksbank.se/monetary_policy_data/v1/forecasts/policy_rounds"
+          headers = {"Accept": "application/json", "User-Agent": "StockBot/2"}
+          try:
+              with httpx.Client(timeout=30.0) as client:
+                  response = client.get(url, headers=headers)
+              status = str(response.status_code)
+          except Exception as exc:
+              status = f"error:{type(exc).__name__}"
+          Path("riksbank-policy-rounds-status.txt").write_text(status + "\n", encoding="utf-8")
+          print(f"riksbank_policy_rounds_status={status}")
+          PY
+      - name: Probe Riksbank series catalogue
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import httpx
+
+          url = "https://api.riksbank.se/monetary_policy_data/v1/forecasts/series_ids"
+          headers = {"Accept": "application/json", "User-Agent": "StockBot/2"}
+          try:
+              with httpx.Client(timeout=30.0) as client:
+                  response = client.get(url, headers=headers)
+              status = str(response.status_code)
+          except Exception as exc:
+              status = f"error:{type(exc).__name__}"
+          Path("riksbank-series-ids-status.txt").write_text(status + "\n", encoding="utf-8")
+          print(f"riksbank_series_ids_status={status}")
+          PY
       - name: Probe external Riksbank default forecast
         run: |
           python -m stockbot.cli.riksbank_macro \
@@ -123,6 +157,8 @@ jobs:
             riksbank-user-agent-status.txt
             riksbank-provider-headers-status.txt
             riksbank-httpx-status.txt
+            riksbank-policy-rounds-status.txt
+            riksbank-series-ids-status.txt
             riksbank-default-smoke.json
             riksbank-explicit-round-smoke.json
             riksbank-smoke.json
