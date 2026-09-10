@@ -17,9 +17,13 @@ jobs:
           cache: pip
       - name: Install
         run: python -m pip install -e '.[dev]'
+      - name: Compile
+        run: python -m compileall -q src scripts
       - name: Test
         run: pytest -q
       - name: V0 demo
         run: python scripts/run_demo.py
       - name: V1 training demo
         run: python scripts/run_training_demo.py
+      - name: V1.2 offline market-data smoke
+        run: pytest -q tests/data/test_tiingo_provider.py tests/data/test_yahoo_bootstrap_provider.py tests/data/test_snapshots.py tests/data/test_download.py tests/integration/test_market_training.py tests/integration/test_market_cli.py
