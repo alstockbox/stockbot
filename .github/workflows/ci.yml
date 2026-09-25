@@ -19,6 +19,12 @@ jobs:
         run: python -m pip install -e '.[dev]'
       - name: Test
         run: pytest -q
+      - name: Safeguard smoke test
+        run: python scripts/run_safeguard_smoke.py
+      - name: Paper readiness gate
+        run: python scripts/check_paper_readiness.py
+      - name: Integrated paper runtime demo
+        run: python scripts/run_paper_runtime_demo.py
       - name: V0 demo
         run: python scripts/run_demo.py
       - name: V1 training demo

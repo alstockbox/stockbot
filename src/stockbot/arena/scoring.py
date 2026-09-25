@@ -24,5 +24,7 @@ def research_score(metrics: dict[str, float], robustness: float) -> float:
         + 0.08 * _m(metrics, "turnover")
         + 1.0 * _m(metrics, "instability")
         + 1.0 * _m(metrics, "concentration")
+        + 2.5 * _m(metrics, "negative_month_rate")
+        + 1.5 * _m(metrics, "average_loss_month")
     )
     return float(reward - penalty)
