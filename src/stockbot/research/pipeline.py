@@ -14,6 +14,7 @@ from stockbot.ensemble.weighted import combine_signals
 from stockbot.features.pipeline import build_technical_features
 from stockbot.ml.dataset import make_forward_return_dataset
 from stockbot.ml.walkforward import walk_forward_predictions
+from stockbot.learning.stability import stability_metrics
 from stockbot.portfolio.constructor import PortfolioConfig, target_from_signal
 from stockbot.regimes.detector import detect_regime
 from stockbot.risk.engine import RiskConfig, RiskEngine
@@ -79,6 +80,12 @@ def _build_ml_oos_signal(features: pd.DataFrame, close: pd.Series) -> tuple[pd.S
     return signal, int(predictions.notna().sum())
 
 
+def _metrics_with_stability(metrics: dict[str, float], returns: pd.Series) -> dict[str, float]:
+    enriched = dict(metrics)
+    enriched.update(stability_metrics(returns))
+    return enriched
+
+
 def run_research(
     frame: pd.DataFrame,
     benchmark: pd.Series | None = None,
@@ -112,9 +119,17 @@ def run_research(
             benchmark_returns,
             risk_engine=risk_engine,
         )
-        robustness = max(0.0, min(1.0, 1.0 - bt.metrics["max_drawdown"]))
-        score = research_score(bt.metrics, robustness)
-        leaderboard.append({"name": strategy.name, "score": score, **bt.metrics})
+        metrics = _metrics_with_stability(bt.metrics, bt.returns)
+        robustness = max(
+            0.0,
+            min(
+                1.0,
+                (1.0 - metrics["max_drawdown"])
+                * (1.0 - metrics["negative_month_rate"]),
+            ),
+        )
+        score = research_score(metrics, robustness)
+        leaderboard.append({"name": strategy.name, "score": score, **metrics})
         robustness_by_name[strategy.name] = robustness
         samples_by_name[strategy.name] = max(0, len(frame) - 21)
 
@@ -128,10 +143,19 @@ def run_research(
             benchmark_returns,
             risk_engine=risk_engine,
         )
+        metrics = _metrics_with_stability(ml_bt.metrics, ml_bt.returns)
         coverage = min(1.0, ml_oos_samples / max(1, len(frame) // 2))
-        ml_robustness = max(0.0, min(1.0, (1.0 - ml_bt.metrics["max_drawdown"]) * coverage))
-        ml_score = research_score(ml_bt.metrics, ml_robustness)
-        leaderboard.append({"name": "ml_ridge", "score": ml_score, **ml_bt.metrics})
+        ml_robustness = max(
+            0.0,
+            min(
+                1.0,
+                (1.0 - metrics["max_drawdown"])
+                * (1.0 - metrics["negative_month_rate"])
+                * coverage,
+            ),
+        )
+        ml_score = research_score(metrics, ml_robustness)
+        leaderboard.append({"name": "ml_ridge", "score": ml_score, **metrics})
         robustness_by_name["ml_ridge"] = ml_robustness
         samples_by_name["ml_ridge"] = ml_oos_samples
     else:
@@ -181,8 +205,9 @@ def run_research(
     latest_regime = regime_series.iloc[-1]
     latest_signal = float(ensemble_signal.iloc[-1])
 
+    ensemble_metrics = _metrics_with_stability(ensemble_bt.metrics, ensemble_bt.returns)
     context = {
-        "metrics": ensemble_bt.metrics,
+        "metrics": ensemble_metrics,
         "regime_degradation": latest_regime is MarketRegime.BEAR_STRESS and ensemble_bt.metrics["cagr"] < 0,
         "leaderboard": leaderboard,
         "champion_name": champion_name,
