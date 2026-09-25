@@ -20,6 +20,26 @@ class SmokeCase:
     expected_reason: str | None = None
 
 
+def _intent(
+    decision_id: str,
+    *,
+    mode: ExecutionMode = ExecutionMode.PAPER,
+    risk: float = 1.0,
+    notional: float = 100.0,
+    gross_edge: float = 1.0,
+    cost: float = 0.10,
+) -> ExecutionIntent:
+    return ExecutionIntent(
+        decision_id,
+        "EURUSD",
+        mode,
+        risk,
+        notional,
+        gross_edge,
+        cost,
+    )
+
+
 def default_smoke_cases(equity_usd: float = 466.0) -> list[SmokeCase]:
     safe = SafeguardState(
         equity_usd=equity_usd,
@@ -29,41 +49,107 @@ def default_smoke_cases(equity_usd: float = 466.0) -> list[SmokeCase]:
     return [
         SmokeCase(
             "small_positive_edge_paper",
-            ExecutionIntent("ok-1", "EURUSD", ExecutionMode.PAPER, 1.50, 150.0, 1.00, 0.10),
+            _intent("ok-1", risk=1.50, notional=150.0),
             safe,
             True,
         ),
         SmokeCase(
             "oversized_order_risk",
-            ExecutionIntent("risk-1", "EURUSD", ExecutionMode.PAPER, 5.00, 150.0, 1.00, 0.10),
+            _intent("risk-1", risk=5.00),
             safe,
             False,
             "ORDER_RISK_LIMIT",
         ),
         SmokeCase(
+            "total_open_risk_limit",
+            _intent("total-risk-1", risk=2.0),
+            SafeguardState(
+                equity_usd,
+                equity_usd,
+                open_risk_usd=8.0,
+                data_age_seconds=1.0,
+            ),
+            False,
+            "TOTAL_OPEN_RISK_LIMIT",
+        ),
+        SmokeCase(
             "stale_market_data",
-            ExecutionIntent("stale-1", "EURUSD", ExecutionMode.PAPER, 1.00, 100.0, 1.00, 0.10),
+            _intent("stale-1"),
             SafeguardState(equity_usd, equity_usd, data_age_seconds=120.0),
             False,
             "STALE_DATA",
         ),
         SmokeCase(
             "daily_loss_circuit_breaker",
-            ExecutionIntent("loss-1", "EURUSD", ExecutionMode.PAPER, 1.00, 100.0, 1.00, 0.10),
+            _intent("loss-1"),
             SafeguardState(equity_usd, equity_usd, daily_pnl_usd=-10.0),
             False,
             "DAILY_LOSS_LIMIT",
         ),
         SmokeCase(
+            "drawdown_circuit_breaker",
+            _intent("dd-1"),
+            SafeguardState(
+                equity_usd=400.0,
+                equity_peak_usd=466.0,
+                data_age_seconds=1.0,
+            ),
+            False,
+            "MAX_DRAWDOWN",
+        ),
+        SmokeCase(
+            "kill_switch",
+            _intent("kill-1"),
+            SafeguardState(
+                equity_usd,
+                equity_usd,
+                data_age_seconds=1.0,
+                kill_switch=True,
+            ),
+            False,
+            "KILL_SWITCH",
+        ),
+        SmokeCase(
+            "gross_exposure_limit",
+            _intent("gross-1", notional=200.0),
+            SafeguardState(
+                equity_usd,
+                equity_usd,
+                gross_notional_usd=800.0,
+                data_age_seconds=1.0,
+            ),
+            False,
+            "GROSS_EXPOSURE_LIMIT",
+        ),
+        SmokeCase(
+            "order_rate_limit",
+            _intent("rate-1"),
+            SafeguardState(
+                equity_usd,
+                equity_usd,
+                data_age_seconds=1.0,
+                orders_last_minute=10,
+            ),
+            False,
+            "ORDER_RATE_LIMIT",
+        ),
+        SmokeCase(
             "no_net_edge",
-            ExecutionIntent("edge-1", "EURUSD", ExecutionMode.PAPER, 1.00, 100.0, 0.05, 0.10),
+            _intent("edge-1", gross_edge=0.05, cost=0.10),
             safe,
             False,
             "NO_POSITIVE_NET_EDGE",
         ),
         SmokeCase(
+            "cost_consumes_edge",
+            _intent("cost-1", gross_edge=0.10, cost=0.10),
+            safe,
+            False,
+            "COST_CONSUMES_EDGE",
+        ),
+        SmokeCase(
             "live_is_fail_closed",
-            ExecutionIntent("live-1", "EURUSD", ExecutionMode.LIVE, 1.00, 100.0, 1.00, 0.10),
+            _intent("live-1", mode=ExecutionMode.LIVE),
             safe,
             False,
             "LIVE_EXECUTION_DISABLED",
