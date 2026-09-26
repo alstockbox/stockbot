@@ -1,15 +1,17 @@
 #property strict
-#property version   "1.00"
+#property version   "1.10"
 #property description "Read-only StockBot snapshot exporter. Contains no order functions."
 
-input string InpSymbols = "EURUSD,GBPUSD,XAUUSD";
-input string InpOutputFile = "stockbot_snapshot.json";
-input int    InpIntervalSeconds = 1;
+input string          InpSymbols = "EURUSD,GBPUSD,XAUUSD";
+input string          InpOutputFile = "stockbot_snapshot.json";
+input int             InpIntervalSeconds = 1;
+input ENUM_TIMEFRAMES InpTimeframe = PERIOD_M5;
+input int             InpClosedBars = 250;
 
 string JsonEscape(string value)
 {
    StringReplace(value, "\\", "\\\\");
-   StringReplace(value, """, "\\"");
+   StringReplace(value, "\"", "\\\"");
    return value;
 }
 
@@ -35,6 +37,43 @@ string CleanSymbol(string value)
    return value;
 }
 
+string BoolJson(bool value)
+{
+   return value ? "true" : "false";
+}
+
+void AppendClosedBars(
+   string &json,
+   const string symbol,
+   const long server_offset
+)
+{
+   json += "\"bars\":[";
+
+   MqlRates rates[];
+   int copied = CopyRates(symbol, InpTimeframe, 1, InpClosedBars, rates);
+   if(copied > 0)
+   {
+      for(int i = 0; i < copied; i++)
+      {
+         if(i > 0)
+            json += ",";
+
+         datetime bar_utc = (datetime)((long)rates[i].time - server_offset);
+         json += "{";
+         json += "\"timestamp\":\"" + IsoUtc(bar_utc) + "\",";
+         json += "\"open\":" + DoubleToString(rates[i].open, 12) + ",";
+         json += "\"high\":" + DoubleToString(rates[i].high, 12) + ",";
+         json += "\"low\":" + DoubleToString(rates[i].low, 12) + ",";
+         json += "\"close\":" + DoubleToString(rates[i].close, 12) + ",";
+         json += "\"volume\":" + LongToString((long)rates[i].tick_volume);
+         json += "}";
+      }
+   }
+
+   json += "]";
+}
+
 void ExportSnapshot()
 {
    int handle = FileOpen(
@@ -51,15 +90,15 @@ void ExportSnapshot()
    long server_offset = (long)(TimeTradeServer() - TimeGMT());
 
    string json = "{";
-   json += ""account":{";
-   json += ""balance":" + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 8) + ",";
-   json += ""equity":" + DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY), 8) + ",";
-   json += ""free_margin":" + DoubleToString(AccountInfoDouble(ACCOUNT_MARGIN_FREE), 8) + ",";
-   json += ""currency":"" + JsonEscape(AccountInfoString(ACCOUNT_CURRENCY)) + "",";
-   json += ""timestamp":"" + IsoUtc(utc_now) + """;
+   json += "\"account\":{";
+   json += "\"balance\":" + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 8) + ",";
+   json += "\"equity\":" + DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY), 8) + ",";
+   json += "\"free_margin\":" + DoubleToString(AccountInfoDouble(ACCOUNT_MARGIN_FREE), 8) + ",";
+   json += "\"currency\":\"" + JsonEscape(AccountInfoString(ACCOUNT_CURRENCY)) + "\",";
+   json += "\"timestamp\":\"" + IsoUtc(utc_now) + "\"";
    json += "},";
 
-   json += ""symbols":{";
+   json += "\"symbols\":{";
 
    string symbols[];
    int symbol_count = StringSplit(InpSymbols, ',', symbols);
@@ -96,21 +135,24 @@ void ExportSnapshot()
          json += ",";
       first = false;
 
-      json += """ + JsonEscape(symbol) + "":{";
-      json += ""quote":{";
-      json += ""bid":" + DoubleToString(tick.bid, 12) + ",";
-      json += ""ask":" + DoubleToString(tick.ask, 12) + ",";
-      json += ""timestamp":"" + IsoUtc(tick_utc) + """;
+      json += "\"" + JsonEscape(symbol) + "\":{";
+
+      json += "\"quote\":{";
+      json += "\"bid\":" + DoubleToString(tick.bid, 12) + ",";
+      json += "\"ask\":" + DoubleToString(tick.ask, 12) + ",";
+      json += "\"timestamp\":\"" + IsoUtc(tick_utc) + "\"";
       json += "},";
 
-      json += ""spec":{";
-      json += ""tick_size":" + DoubleToString(tick_size, 12) + ",";
-      json += ""tick_value":" + DoubleToString(SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE), 12) + ",";
-      json += ""volume_min":" + DoubleToString(SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN), 8) + ",";
-      json += ""volume_max":" + DoubleToString(SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX), 8) + ",";
-      json += ""volume_step":" + DoubleToString(SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP), 8) + ",";
-      json += ""trade_enabled":" + string(trade_mode == SYMBOL_TRADE_MODE_DISABLED ? "false" : "true");
-      json += "}";
+      json += "\"spec\":{";
+      json += "\"tick_size\":" + DoubleToString(tick_size, 12) + ",";
+      json += "\"tick_value\":" + DoubleToString(SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE), 12) + ",";
+      json += "\"volume_min\":" + DoubleToString(SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN), 8) + ",";
+      json += "\"volume_max\":" + DoubleToString(SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX), 8) + ",";
+      json += "\"volume_step\":" + DoubleToString(SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP), 8) + ",";
+      json += "\"trade_enabled\":" + BoolJson(trade_mode != SYMBOL_TRADE_MODE_DISABLED);
+      json += "},";
+
+      AppendClosedBars(json, symbol, server_offset);
 
       json += "}";
    }
@@ -125,9 +167,9 @@ void ExportSnapshot()
 
 int OnInit()
 {
-   if(InpIntervalSeconds < 1)
+   if(InpIntervalSeconds < 1 || InpClosedBars < 30)
    {
-      Print("StockBot exporter: InpIntervalSeconds must be >= 1");
+      Print("StockBot exporter: interval must be >=1 and closed bars >=30");
       return INIT_PARAMETERS_INCORRECT;
    }
 
