@@ -4,7 +4,7 @@ from datetime import datetime
 import json
 from pathlib import Path
 
-from stockbot.data.live_models import AccountSnapshot, MarketQuote, SymbolSpec
+from stockbot.data.live_models import AccountSnapshot, MarketBar, MarketQuote, SymbolSpec
 
 
 def _parse_time(value: str) -> datetime:
@@ -77,3 +77,28 @@ class SnapshotFileProvider:
             volume_step=float(spec["volume_step"]),
             trade_enabled=bool(spec.get("trade_enabled", True)),
         )
+
+
+    def bars(self, symbol: str, timeframe=None, count: int = 250) -> list[MarketBar]:
+        if count <= 0:
+            raise ValueError("count must be positive")
+        payload = self._load()
+        symbols = payload.get("symbols")
+        if not isinstance(symbols, dict) or symbol not in symbols:
+            raise RuntimeError(f"SNAPSHOT_SYMBOL_MISSING:{symbol}")
+        rows = symbols[symbol].get("bars")
+        if not isinstance(rows, list):
+            raise RuntimeError(f"SNAPSHOT_BARS_MISSING:{symbol}")
+        selected = rows[-count:]
+        return [
+            MarketBar(
+                symbol=symbol,
+                timestamp=_parse_time(str(row["timestamp"])),
+                open=float(row["open"]),
+                high=float(row["high"]),
+                low=float(row["low"]),
+                close=float(row["close"]),
+                volume=float(row.get("volume", 0.0)),
+            )
+            for row in selected
+        ]
