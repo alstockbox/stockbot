@@ -12,6 +12,8 @@ from stockbot.runtime.paper_runtime import (
 from stockbot.runtime.shadow_readiness import ShadowReadinessReport, shadow_readiness
 from stockbot.runtime.shadow_runtime import (
     ReadOnlyMarketProvider,
+    ShadowMarkIssue,
+    ShadowRefreshResult,
     ShadowRuntimeDecision,
     ShadowRuntimeResult,
     ShadowTradePlan,
@@ -27,7 +29,9 @@ __all__ = [
     "PaperTradePlan",
     "PaperTradingRuntime",
     "ReadOnlyMarketProvider",
+    "ShadowMarkIssue",
     "ShadowReadinessReport",
+    "ShadowRefreshResult",
     "ShadowRuntimeDecision",
     "ShadowRuntimeResult",
     "ShadowTradePlan",

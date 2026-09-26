@@ -37,8 +37,17 @@ class ShadowExit:
 
 
 class ShadowExecutor:
-    def __init__(self) -> None:
-        self._positions: dict[str, ShadowPosition] = {}
+    def __init__(
+        self,
+        positions: tuple[ShadowPosition, ...] | list[ShadowPosition] | None = None,
+    ) -> None:
+        restored = list(positions or ())
+        ids = [position.decision_id for position in restored]
+        if len(ids) != len(set(ids)):
+            raise ValueError("restored shadow positions must have unique decision_id values")
+        self._positions: dict[str, ShadowPosition] = {
+            position.decision_id: position for position in restored
+        }
         self._closed: list[ShadowExit] = []
 
     @property
@@ -96,22 +105,28 @@ class ShadowExecutor:
         self._positions[decision_id] = position
         return position
 
+    def discard(self, decision_id: str) -> ShadowPosition:
+        return self._positions.pop(decision_id)
+
     def unrealized_pnl(self, decision_id: str, quote: MarketQuote) -> float:
         position = self._positions[decision_id]
         if quote.symbol != position.symbol:
             raise ValueError("quote symbol mismatch")
         return float(position.quantity * (float(quote.bid) - position.entry_price))
 
-    def maybe_close(self, decision_id: str, quote: MarketQuote) -> ShadowExit | None:
+    def exit_reason(self, decision_id: str, quote: MarketQuote) -> str | None:
         position = self._positions[decision_id]
         if quote.symbol != position.symbol:
             raise ValueError("quote symbol mismatch")
         bid = float(quote.bid)
-        reason: str | None = None
         if bid <= position.stop_loss:
-            reason = "STOP_LOSS"
-        elif bid >= position.take_profit:
-            reason = "TAKE_PROFIT"
+            return "STOP_LOSS"
+        if bid >= position.take_profit:
+            return "TAKE_PROFIT"
+        return None
+
+    def maybe_close(self, decision_id: str, quote: MarketQuote) -> ShadowExit | None:
+        reason = self.exit_reason(decision_id, quote)
         if reason is None:
             return None
         return self.close(decision_id, quote, reason=reason)
