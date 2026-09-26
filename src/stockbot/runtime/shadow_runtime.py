@@ -131,11 +131,12 @@ class ShadowTradingRuntime:
         kill_switch: bool = False,
     ) -> ShadowRuntimeResult:
         existing_ids = {entry.event.decision_id for entry in self.journal.entries()}
+        cycle_ids = set(existing_ids)
         decisions: list[ShadowRuntimeDecision] = []
         unseen_plans: list[ShadowTradePlan] = []
 
         for plan in plans:
-            if plan.decision_id in existing_ids:
+            if plan.decision_id in cycle_ids:
                 decisions.append(
                     ShadowRuntimeDecision(
                         plan.decision_id,
@@ -144,6 +145,7 @@ class ShadowTradingRuntime:
                     )
                 )
             else:
+                cycle_ids.add(plan.decision_id)
                 unseen_plans.append(plan)
 
         try:
