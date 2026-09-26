@@ -171,8 +171,15 @@ def main() -> int:
 
     if args.demo:
         with tempfile.TemporaryDirectory() as tmp:
-            snapshot = Path(tmp) / "stockbot_snapshot.json"
+            root = Path(tmp)
+            snapshot = root / "stockbot_snapshot.json"
             _write_demo_snapshot(snapshot, symbols)
+            if args.journal == Path("var/live_shadow_journal.jsonl"):
+                args.journal = root / "demo_shadow_journal.jsonl"
+            if args.state is None:
+                args.state = root / "demo_shadow_state.json"
+            if args.lifecycle is None:
+                args.lifecycle = root / "demo_shadow_lifecycle.jsonl"
             return _run(snapshot, args, symbols)
 
     if args.snapshot_file is None:
