@@ -29,6 +29,8 @@ jobs:
         run: python scripts/run_paper_runtime_demo.py
       - name: Shadow runtime demo
         run: python scripts/run_shadow.py --demo
+      - name: Causal live-shadow demo
+        run: python scripts/run_live_shadow.py --demo
       - name: V0 demo
         run: python scripts/run_demo.py
       - name: V1 training demo

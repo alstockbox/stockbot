@@ -41,6 +41,7 @@ class ShadowTradePlan:
     risk_fraction_of_equity: float
     notional_fraction_of_equity: float
     reward_risk: float = 2.0
+    market_regime: str | None = None
 
     def __post_init__(self) -> None:
         if not self.decision_id.strip():
@@ -104,7 +105,7 @@ class ShadowTradingRuntime:
                 timestamp=timestamp,
                 symbol=plan.opportunity.symbol,
                 strategy=plan.opportunity.source,
-                regime=regime,
+                regime=plan.market_regime or regime,
                 signal_score=max(
                     0.0,
                     min(1.0, 0.5 + float(plan.opportunity.expected_return) * 10.0),
