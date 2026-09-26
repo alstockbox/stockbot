@@ -7,6 +7,7 @@ from stockbot.execution.safeguard import (
     SafeguardGate,
     SafeguardState,
 )
+from stockbot.execution.shadow import ShadowExecutor, ShadowExit, ShadowPosition, ShadowSide
 
 __all__ = [
     "ExecutionIntent",
@@ -18,4 +19,8 @@ __all__ = [
     "SafeguardDecision",
     "SafeguardGate",
     "SafeguardState",
+    "ShadowExecutor",
+    "ShadowExit",
+    "ShadowPosition",
+    "ShadowSide",
 ]
