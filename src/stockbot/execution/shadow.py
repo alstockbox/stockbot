@@ -37,8 +37,17 @@ class ShadowExit:
 
 
 class ShadowExecutor:
-    def __init__(self) -> None:
-        self._positions: dict[str, ShadowPosition] = {}
+    def __init__(
+        self,
+        positions: tuple[ShadowPosition, ...] | list[ShadowPosition] | None = None,
+    ) -> None:
+        restored = list(positions or ())
+        ids = [position.decision_id for position in restored]
+        if len(ids) != len(set(ids)):
+            raise ValueError("restored shadow positions must have unique decision_id values")
+        self._positions: dict[str, ShadowPosition] = {
+            position.decision_id: position for position in restored
+        }
         self._closed: list[ShadowExit] = []
 
     @property
@@ -95,6 +104,9 @@ class ShadowExecutor:
         )
         self._positions[decision_id] = position
         return position
+
+    def discard(self, decision_id: str) -> ShadowPosition:
+        return self._positions.pop(decision_id)
 
     def unrealized_pnl(self, decision_id: str, quote: MarketQuote) -> float:
         position = self._positions[decision_id]
