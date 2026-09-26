@@ -71,6 +71,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--demo", action="store_true")
     parser.add_argument("--symbols", default="EURUSD")
     parser.add_argument("--journal", type=Path, default=Path("var/live_shadow_journal.jsonl"))
+    parser.add_argument("--state", type=Path)
+    parser.add_argument("--lifecycle", type=Path)
     parser.add_argument("--loop", action="store_true")
     parser.add_argument("--interval-seconds", type=float, default=5.0)
     return parser
@@ -113,6 +115,7 @@ def _cycle(
         timestamp=now,
         regime="multi_asset_live_shadow",
     )
+    portfolio = runtime.portfolio_state
 
     return {
         "analyses": analyses,
@@ -121,6 +124,14 @@ def _cycle(
         "accepted": execution.accepted,
         "rejected": execution.rejected,
         "open_shadow_positions": len(runtime.executor.positions),
+        "realized_pnl_usd": (
+            portfolio.realized_pnl_usd if portfolio is not None else 0.0
+        ),
+        "equity_peak_usd": (
+            portfolio.equity_peak_usd if portfolio is not None else None
+        ),
+        "daily_realized_pnl_usd": runtime.daily_realized_pnl(now),
+        "lifecycle_events": len(runtime.lifecycle.entries()),
         "live_orders_possible": False,
     }
 
@@ -131,7 +142,12 @@ def _run(
     symbols: list[str],
 ) -> int:
     provider = SnapshotFileProvider(snapshot_file)
-    runtime = ShadowTradingRuntime(provider, args.journal)
+    runtime = ShadowTradingRuntime(
+        provider,
+        args.journal,
+        state_path=args.state,
+        lifecycle_path=args.lifecycle,
+    )
     planner = LiveShadowPlanner(provider)
 
     while True:
