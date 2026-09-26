@@ -114,16 +114,19 @@ class ShadowExecutor:
             raise ValueError("quote symbol mismatch")
         return float(position.quantity * (float(quote.bid) - position.entry_price))
 
-    def maybe_close(self, decision_id: str, quote: MarketQuote) -> ShadowExit | None:
+    def exit_reason(self, decision_id: str, quote: MarketQuote) -> str | None:
         position = self._positions[decision_id]
         if quote.symbol != position.symbol:
             raise ValueError("quote symbol mismatch")
         bid = float(quote.bid)
-        reason: str | None = None
         if bid <= position.stop_loss:
-            reason = "STOP_LOSS"
-        elif bid >= position.take_profit:
-            reason = "TAKE_PROFIT"
+            return "STOP_LOSS"
+        if bid >= position.take_profit:
+            return "TAKE_PROFIT"
+        return None
+
+    def maybe_close(self, decision_id: str, quote: MarketQuote) -> ShadowExit | None:
+        reason = self.exit_reason(decision_id, quote)
         if reason is None:
             return None
         return self.close(decision_id, quote, reason=reason)
