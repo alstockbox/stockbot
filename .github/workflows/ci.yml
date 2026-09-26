@@ -23,8 +23,12 @@ jobs:
         run: python scripts/run_safeguard_smoke.py
       - name: Paper readiness gate
         run: python scripts/check_paper_readiness.py
+      - name: Shadow readiness gate
+        run: python scripts/check_shadow_readiness.py
       - name: Integrated paper runtime demo
         run: python scripts/run_paper_runtime_demo.py
+      - name: Shadow runtime demo
+        run: python scripts/run_shadow.py --demo
       - name: V0 demo
         run: python scripts/run_demo.py
       - name: V1 training demo
