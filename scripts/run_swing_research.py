@@ -15,6 +15,7 @@ import pandas as pd
 
 from stockbot.swing.data_quality import XSTOProvenance, audit_xsto_data
 from stockbot.swing.engine import SwingConfig, run_swing_backtest
+from stockbot.swing.walkforward import run_walkforward
 
 
 def main() -> int:
@@ -22,6 +23,7 @@ def main() -> int:
     parser.add_argument("--csv", type=Path, required=True, help="License-compliant OHLCV CSV")
     parser.add_argument("--manifest", type=Path, help="JSON data provenance; enables XSTO calendar audit")
     parser.add_argument("--capital-sek", type=float, default=1_000.0)
+    parser.add_argument("--walkforward", action="store_true", help="Train-only tuning and held-out rolling evaluation; requires --manifest and >=882 sessions")
     parser.add_argument("--output", type=Path, help="Optional JSON report, overwritten if present")
     args = parser.parse_args()
     if not args.csv.is_file():
@@ -36,8 +38,17 @@ def main() -> int:
             parser.error("data manifest must be a JSON object")
         provenance = XSTOProvenance.from_dict(raw)
         receipt = audit_xsto_data(frame, provenance)  # mandatory before backtest
-    result = run_swing_backtest(frame, SwingConfig(initial_sek=args.capital_sek))
-    report = {
+    if args.walkforward and receipt is None:
+        parser.error("--walkforward requires --manifest for XSTO calendar audit")
+    if args.walkforward:
+        wf = run_walkforward(frame)
+        report = wf.to_dict()
+        report["data_quality"] = receipt.to_dict()  # type: ignore[union-attr]
+        report["orders_sent"] = 0
+        report["warning"] = "OOS backtest is not independent proof of tradability, profitability, data rights, actions or market impact."
+    else:
+        result = run_swing_backtest(frame, SwingConfig(initial_sek=args.capital_sek))
+        report = {
         "mode": "BACKTEST_ONLY",
         "orders_sent": 0,
         "research_grade": "UNVERIFIED",
