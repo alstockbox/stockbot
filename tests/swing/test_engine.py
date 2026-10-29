@@ -86,3 +86,11 @@ def test_configuration_is_paper_conservative():
         SwingConfig(risk_per_trade=0.05)
     with pytest.raises(ValueError):
         SwingConfig(max_position_weight=1.1)
+
+
+def test_prior_close_relative_strength_determines_first_position():
+    bars = sample_bars(symbols=("AAA", "BBB"))
+    cfg = SwingConfig(max_positions=1)
+    result = run_swing_backtest(bars, cfg)
+    first = next(f for f in result.fills if f.side == "BUY")
+    assert first.symbol == "BBB", "greater prior-close strength must win, not ticker order"
