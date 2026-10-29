@@ -26,6 +26,7 @@ class SwingConfig:
     minimum_commission_sek: float = 1.0
     execution_bps_each_side: float = 10.0
     atr_stop_multiple: float = 2.5
+    first_trade_date: str | None = None  # OOS: warmup before this date is signal-only
 
     def __post_init__(self) -> None:
         if not isfinite(self.initial_sek) or self.initial_sek <= 0:
@@ -46,6 +47,13 @@ class SwingConfig:
             raise ValueError("invalid execution_bps_each_side")
         if not (0 < self.atr_stop_multiple <= 10):
             raise ValueError("invalid atr_stop_multiple")
+        if self.first_trade_date is not None:
+            from datetime import date
+            try:
+                if date.fromisoformat(self.first_trade_date).isoformat() != self.first_trade_date:
+                    raise ValueError("first_trade_date must be YYYY-MM-DD")
+            except (TypeError, ValueError) as exc:
+                raise ValueError("first_trade_date must be YYYY-MM-DD") from exc
 
 
 @dataclass(frozen=True)
@@ -167,6 +175,7 @@ def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None) -> S
     impact_sek = 0.0
     peak = cfg.initial_sek
     halted = False
+    first_trade = pd.Timestamp(cfg.first_trade_date) if cfg.first_trade_date else None
 
     for i, today in enumerate(dates):
         previous_day = dates[i - 1] if i else None
@@ -202,7 +211,8 @@ def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None) -> S
         if open_equity <= peak * (1 - cfg.max_drawdown):
             halted = True  # latch: restart requires explicit review
 
-        if previous_day is not None and not halted:
+        if (previous_day is not None and not halted
+                and (first_trade is None or today >= first_trade)):
             # Rank using ONLY prior-close information, never ticker order
             # or today's high/close.
             candidates: list[tuple[float, str]] = []
