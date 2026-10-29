@@ -39,7 +39,8 @@ class XSTOProvenance:
             raise ValueError("incomplete provenance record") from exc
 
     def __post_init__(self) -> None:
-        if not self.provider.strip() or not self.terms_reference.strip():
+        if (not isinstance(self.provider, str) or not isinstance(self.terms_reference, str)
+                or not self.provider.strip() or not self.terms_reference.strip()):
             raise ValueError("data provider and terms reference are required")
         if self.currency != "SEK":
             raise ValueError("XSTO research requires explicit SEK data")
@@ -88,8 +89,6 @@ class XSTOQualityReceipt:
 def audit_xsto_data(
     frame: pd.DataFrame,
     manifest: XSTOProvenance,
-    *,
-    allow_trailing_session_gap: bool = False,
 ) -> XSTOQualityReceipt:
     """Fail closed for holidays, missing sessions, data timestamps and bad bars.
 
