@@ -7,10 +7,13 @@ Synthetic or historical backtests are not live-performance evidence.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from math import floor, isfinite
 from typing import Literal
 
 import pandas as pd
+
+from stockbot.swing.corporate_actions import CorporateAction, validate_actions
 
 REQUIRED = {"date", "symbol", "open", "high", "low", "close", "volume"}
 
@@ -75,6 +78,9 @@ class SwingResult:
     max_drawdown: float
     total_fees_sek: float
     total_execution_impact_sek: float
+    dividend_cash_paid_sek: float = 0.0
+    dividend_receivable_sek: float = 0.0
+    corporate_action_events: tuple[str, ...] = ()
 
 
 @dataclass
@@ -153,7 +159,8 @@ def _indicators(frame: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None) -> SwingResult:
+def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None, *,
+                       corporate_actions: tuple[CorporateAction, ...] = ()) -> SwingResult:
     """Simulate next-open entries/exits, gap-aware stop exits, and whole-share fills.
 
     Signal at previous CLOSE; next OPEN execution. Stop checks use the current
@@ -162,11 +169,29 @@ def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None) -> S
     """
     cfg = cfg or SwingConfig()
     clean = validate_ohlcv(frame)
-    panels = {
-        sym: _indicators(group)
-        for sym, group in clean.groupby("symbol", sort=True)
-    }
-    dates = list(next(iter(panels.values())).index)
+    dates = list(pd.DatetimeIndex(clean["date"].drop_duplicates().sort_values()))
+    actions_by_date = validate_actions(
+        corporate_actions, symbols=set(clean["symbol"]),
+        sessions={day.date() for day in dates},
+    )
+    raw_panels: dict[str, pd.DataFrame] = {}
+    panels: dict[str, pd.DataFrame] = {}
+    for sym, group in clean.groupby("symbol", sort=True):
+        raw_panels[sym] = group.set_index("date").sort_index()
+        adjusted = group.copy()
+        scale_factor = pd.Series(1.0, index=adjusted.index)
+        # Continuity-adjust pre-split history for indicators, never executions.
+        # Future split factors multiply an entire pre-event history uniformly:
+        # ratio-based decisions cannot peek into future returns.
+        for event in corporate_actions:
+            if event.symbol == sym and event.kind == "SPLIT":
+                before = adjusted["date"].dt.date < event.ex_date
+                factor = event.denominator / event.numerator
+                adjusted.loc[before, ["open", "high", "low", "close"]] *= factor
+                scale_factor.loc[before] *= factor
+        features = _indicators(adjusted)
+        features["atr_raw"] = features["atr"].to_numpy() / scale_factor.to_numpy()
+        panels[sym] = features
     cash = cfg.initial_sek
     positions: dict[str, _Position] = {}
     history: list[float] = []
@@ -176,9 +201,35 @@ def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None) -> S
     peak = cfg.initial_sek
     halted = False
     first_trade = pd.Timestamp(cfg.first_trade_date) if cfg.first_trade_date else None
+    receivables: list[tuple[date, float]] = []
+    dividend_cash_paid = 0.0
+    action_log: list[str] = []
 
     for i, today in enumerate(dates):
         previous_day = dates[i - 1] if i else None
+        # Ex-date corporate events are applied BEFORE the opening session.
+        # Payment-date cash remains unavailable until actually due.
+        for action in actions_by_date.get(today.date(), ()):
+            holding = positions.get(action.symbol)
+            if action.kind == "SPLIT":
+                if holding is not None:
+                    new_shares = holding.quantity * action.numerator
+                    if new_shares % action.denominator:
+                        raise ValueError("fractional split needs verified cash-in-lieu input")
+                    holding.quantity = new_shares // action.denominator
+                    holding.stop *= action.denominator / action.numerator
+            elif holding is not None:
+                receivables.append((action.pay_date, holding.quantity * action.dividend_per_share_sek))
+            action_log.append(f"{today.date()}:{action.symbol}:{action.kind}")
+        still_owed: list[tuple[date, float]] = []
+        for payment_date, amount in receivables:
+            if payment_date <= today.date():
+                cash += amount
+                dividend_cash_paid += amount
+            else:
+                still_owed.append((payment_date, amount))
+        receivables = still_owed
+        unpaid_dividends = sum(amount for _, amount in receivables)
 
         def sell(symbol: str, raw_price: float, reason: str) -> None:
             nonlocal cash, fees, impact_sek
@@ -194,7 +245,9 @@ def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None) -> S
 
         # Exit existing positions first: overnight gaps fill at OPEN, not STOP.
         for symbol in sorted(tuple(positions)):
-            row = panels[symbol].loc[today]
+            row = raw_panels[symbol].loc[today]
+            if float(row["volume"]) <= 0:
+                continue  # trading halt: no executable stop/exit
             pos = positions[symbol]
             if float(row["open"]) <= pos.stop:
                 sell(symbol, float(row["open"]), "GAP_STOP")
@@ -203,8 +256,8 @@ def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None) -> S
             elif float(row["low"]) <= pos.stop:
                 sell(symbol, pos.stop, "INTRADAY_STOP")
 
-        open_equity = cash + sum(
-            p.quantity * float(panels[s].loc[today, "open"])
+        open_equity = cash + unpaid_dividends + sum(
+            p.quantity * float(raw_panels[s].loc[today, "open"])
             for s, p in positions.items()
         )
         peak = max(peak, open_equity)
@@ -232,10 +285,13 @@ def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None) -> S
                 strategy = str(prior["entry"])
                 if not strategy:
                     continue
-                atr = float(prior["atr"])
+                atr = float(prior["atr_raw"])
                 if not isfinite(atr) or atr <= 0:
                     continue
-                raw = float(panels[symbol].loc[today, "open"])
+                market = raw_panels[symbol].loc[today]
+                if float(market["volume"]) <= 0:
+                    continue  # halted stock: no executable opening trade
+                raw = float(market["open"])
                 executed = _execution_price(raw, True, cfg)
                 stop_distance = cfg.atr_stop_multiple * atr
                 if stop_distance <= 0 or stop_distance >= executed:
@@ -257,11 +313,11 @@ def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None) -> S
                                   quantity, executed, charge, strategy))
                 # A stop may be hit on the entry day. OHLC ordering is unknown;
                 # conservatively assume the stop triggers if the daily low crossed it.
-                if float(panels[symbol].loc[today, "low"]) <= positions[symbol].stop:
+                if float(market["low"]) <= positions[symbol].stop:
                     sell(symbol, positions[symbol].stop, "ENTRY_DAY_STOP")
 
-        equity = cash + sum(
-            pos.quantity * float(panels[sym].loc[today, "close"])
+        equity = cash + unpaid_dividends + sum(
+            pos.quantity * float(raw_panels[sym].loc[today, "close"])
             for sym, pos in positions.items()
         )
         peak = max(peak, equity)
@@ -272,11 +328,13 @@ def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None) -> S
         # Trailing stop updates apply FROM NEXT SESSION (no same-bar lookahead).
         for symbol, pos in positions.items():
             row = panels[symbol].loc[today]
-            atr = float(row["atr"])
+            atr = float(row["atr_raw"])
             if isfinite(atr) and atr > 0:
-                pos.stop = max(pos.stop, float(row["close"]) - cfg.atr_stop_multiple * atr)
+                pos.stop = max(pos.stop, float(raw_panels[symbol].loc[today, "close"]) - cfg.atr_stop_multiple * atr)
 
     equity_series = pd.Series(history, index=pd.DatetimeIndex(dates), name="equity_sek")
     dd = 1 - equity_series / equity_series.cummax().clip(lower=1e-12)
     return SwingResult(equity_series, tuple(fills), float(equity_series.iloc[-1]),
-                       float(dd.max()), fees, impact_sek)
+                       float(dd.max()), fees, impact_sek,
+                       dividend_cash_paid, sum(amount for _, amount in receivables),
+                       tuple(action_log))

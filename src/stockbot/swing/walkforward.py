@@ -15,6 +15,7 @@ from typing import Any
 import pandas as pd
 
 from stockbot.swing.engine import SwingConfig, run_swing_backtest, validate_ohlcv
+from stockbot.swing.corporate_actions import CorporateAction, validate_actions
 
 
 @dataclass(frozen=True)
@@ -73,10 +74,13 @@ class WalkForwardResult:
         return asdict(self)
 
 
-def run_walkforward(frame: pd.DataFrame, config: WalkForwardConfig | None = None) -> WalkForwardResult:
+def run_walkforward(frame: pd.DataFrame, config: WalkForwardConfig | None = None, *,
+                    corporate_actions: tuple[CorporateAction, ...] = ()) -> WalkForwardResult:
     cfg = config or WalkForwardConfig()
     clean = validate_ohlcv(frame)
     dates = pd.DatetimeIndex(clean["date"].unique()).sort_values()
+    validate_actions(corporate_actions, symbols=set(clean["symbol"]),
+                     sessions={d.date() for d in dates})
     needed = cfg.train_sessions + cfg.test_sessions * cfg.min_folds
     if len(dates) < needed:
         raise ValueError(f"insufficient complete sessions for OOS: {len(dates)} < {needed}")
@@ -92,6 +96,8 @@ def run_walkforward(frame: pd.DataFrame, config: WalkForwardConfig | None = None
     for split in range(cfg.train_sessions, len(dates) - cfg.test_sessions + 1, cfg.test_sessions):
         train = clean[clean["date"] <= dates[split - 1]]
         through_test = clean[clean["date"] <= dates[split + cfg.test_sessions - 1]]
+        train_actions = tuple(e for e in corporate_actions if e.ex_date <= dates[split - 1].date())
+        test_actions = tuple(e for e in corporate_actions if e.ex_date <= dates[split + cfg.test_sessions - 1].date())
         training_trade_start = dates[200].strftime("%Y-%m-%d")
         test_trade_start = dates[split].strftime("%Y-%m-%d")
         # Candidate tuning uses TRAIN window only; no test P&L in selection.
@@ -100,7 +106,7 @@ def run_walkforward(frame: pd.DataFrame, config: WalkForwardConfig | None = None
             training_cfg = replace(cfg.base,
                                    atr_stop_multiple=multiplier,
                                    first_trade_date=training_trade_start)
-            training = run_swing_backtest(train, training_cfg)
+            training = run_swing_backtest(train, training_cfg, corporate_actions=train_actions)
             net_return = training.final_equity_sek / cfg.base.initial_sek - 1.0
             # Penalize drawdown; don't optimize on test results.
             score = net_return - 1.5 * training.max_drawdown
@@ -110,7 +116,7 @@ def run_walkforward(frame: pd.DataFrame, config: WalkForwardConfig | None = None
 
         test_cfg = replace(cfg.base, atr_stop_multiple=chosen,
                            first_trade_date=test_trade_start)
-        tested = run_swing_backtest(through_test, test_cfg)
+        tested = run_swing_backtest(through_test, test_cfg, corporate_actions=test_actions)
         oos_slice = tested.equity.loc[tested.equity.index >= dates[split]]
         # No trades before first test date and no opening positions carried from
         # a synthetic training account: fold starts with initial capital.
@@ -124,7 +130,8 @@ def run_walkforward(frame: pd.DataFrame, config: WalkForwardConfig | None = None
         sensitivities: dict[str, float] = {}
         for cost_bps in cfg.stress_execution_bps:
             stressed = run_swing_backtest(
-                through_test, replace(test_cfg, execution_bps_each_side=cost_bps)
+                through_test, replace(test_cfg, execution_bps_each_side=cost_bps),
+                corporate_actions=test_actions
             )
             sensitivities[f"{cost_bps:g}bps"] = round(
                 (stressed.final_equity_sek / cfg.base.initial_sek - 1.0) * 100, 6

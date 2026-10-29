@@ -14,6 +14,7 @@ from pathlib import Path
 import pandas as pd
 
 from stockbot.swing.data_quality import XSTOProvenance, audit_xsto_data
+from stockbot.swing.corporate_actions_io import parse_action_records
 from stockbot.swing.engine import SwingConfig, run_swing_backtest
 from stockbot.swing.walkforward import WalkForwardConfig, run_walkforward
 
@@ -23,6 +24,7 @@ def main() -> int:
     parser.add_argument("--csv", type=Path, required=True, help="License-compliant OHLCV CSV")
     parser.add_argument("--manifest", type=Path, help="JSON data provenance; enables XSTO calendar audit")
     parser.add_argument("--capital-sek", type=float, default=1_000.0)
+    parser.add_argument("--actions-json", type=Path, help="Optional audited corporate action events JSON; RAW prices only")
     parser.add_argument("--walkforward", action="store_true", help="Train-only tuning and held-out rolling evaluation; requires --manifest and >=882 sessions")
     parser.add_argument("--output", type=Path, help="Optional JSON report, overwritten if present")
     args = parser.parse_args()
@@ -38,16 +40,27 @@ def main() -> int:
             parser.error("data manifest must be a JSON object")
         provenance = XSTOProvenance.from_dict(raw)
         receipt = audit_xsto_data(frame, provenance)  # mandatory before backtest
+    corporate_actions = ()
+    if args.actions_json is not None:
+        if receipt is None or provenance.price_basis != "RAW":
+            parser.error("--actions-json requires an XSTO --manifest with price_basis=RAW")
+        if not args.actions_json.is_file():
+            parser.error("corporate actions JSON file does not exist")
+        corporate_actions = parse_action_records(
+            json.loads(args.actions_json.read_text(encoding="utf-8"))
+        )
     if args.walkforward and receipt is None:
         parser.error("--walkforward requires --manifest for XSTO calendar audit")
     if args.walkforward:
-        wf = run_walkforward(frame, WalkForwardConfig(base=SwingConfig(initial_sek=args.capital_sek)))
+        wf = run_walkforward(frame, WalkForwardConfig(base=SwingConfig(initial_sek=args.capital_sek)),
+                             corporate_actions=corporate_actions)
         report = wf.to_dict()
         report["data_quality"] = receipt.to_dict()  # type: ignore[union-attr]
         report["orders_sent"] = 0
         report["warning"] = "OOS backtest is not independent proof of tradability, profitability, data rights, actions or market impact."
     else:
-        result = run_swing_backtest(frame, SwingConfig(initial_sek=args.capital_sek))
+        result = run_swing_backtest(frame, SwingConfig(initial_sek=args.capital_sek),
+                                    corporate_actions=corporate_actions)
         report = {
         "mode": "BACKTEST_ONLY",
         "orders_sent": 0,
@@ -63,6 +76,9 @@ def main() -> int:
         "commission_sek": round(result.total_fees_sek, 2),
         "execution_impact_sek": round(result.total_execution_impact_sek, 2),
         "hypothetical_fills": len(result.fills),
+        "corporate_action_events": list(result.corporate_action_events),
+        "dividends_paid_sek": round(result.dividend_cash_paid_sek, 2),
+        "outstanding_dividend_receivable_sek": round(result.dividend_receivable_sek, 2),
         "first_session": str(result.equity.index[0].date()),
         "last_session": str(result.equity.index[-1].date()),
     }
