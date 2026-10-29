@@ -51,3 +51,57 @@ Modul: src/stockbot/swing/paper_ledger.py. Den skriver inga riktiga order och ko
 - Ännu inte ansluten till en live-marknadsscheduler, och paper trading har inte påbörjats.
 
 OBS: befintligt StockBot-shadowlager har USD-fält. SEK-paperledgern återanvänder dess beprövade arkitekturprinciper men får aldrig använda USD-saldon som SEK.
+
+
+## P0 Datakvalitet och börskalender — 29 oktober 2026
+
+Ny modul: `src/stockbot/swing/data_quality.py`. Använder kostnadsfria
+`exchange-calendars` med börskalendern `XSTO` (Stockholm), inte förenklad
+måndag–fredag. Importen kräver synkroniserade kompletta handelssessioner och
+avvisar börsstängda datum, mellanliggande saknade handelssessioner, ogiltiga
+OHLCV-barer, fel valuta och tidsstämplar före färdig dagsstängning.
+
+**Ingen datakälla har verifierats som både kostnadsfri och rättighetsmässigt
+lämplig för den avsedda automatiserade handeln.** Nasdaq Nordic erbjuder
+historiska produkter men pris och licens behöver godkännas. Yahoo Finance
+ger inte allmän rätt till automatiserad handel via dess material; webbaserad
+hämtning/scraping ska inte bli produktionsförutsättning.
+
+Prov utan extern uppkoppling:
+```bash
+python scripts/run_swing_research.py --csv data/bars.csv \
+  --manifest data/provenance.json --capital-sek 1000 \
+  --output reports/xsto-backtest.json
+```
+
+Minimal manifestfil `data/provenance.json`:
+```json
+{
+  "provider": "namn på faktisk datakälla",
+  "terms_reference": "länk eller referens till användningsvillkor",
+  "collected_at_utc": "2026-10-29T12:00:00Z",
+  "currency": "SEK",
+  "price_basis": "RAW",
+  "corporate_actions_checked": false,
+  "historical_universe_checked": false
+}
+```
+
+Uppge korrekta källuppgifter. Valideraren skapar deterministiska SHA-256-
+fingeravtryck för data och manifest, men **kan inte oberoende bekräfta**
+datakällans licens, korrekt historiskt aktieuniversum, utdelningar,
+splitar eller att riktiga avslut hade varit möjliga. Den lämnar därför
+alltid `research_grade=UNVERIFIED_PROVENANCE_AND_ACTIONS` och
+`order_execution_permitted=false`. Dataset med handelsstopp,
+bolag som nyintroducerats, avnoterade bolag eller bristfällig data kräver
+utbyggd händelsemodell i stället för att artificiellt fylla prisrader.
+
+Backtest utan `--manifest` är möjligt för syntetiska enhetstester, men
+rapporteras uttryckligen som `NOT_AUDITED`.
+
+Separat Forex/Krypto-bot berörs inte. Handelskonto, inloggning,
+orderläggning och kapitalinsättning är fortsatt avstängt.
+
+**Acceptans för nästa steg:** verifierad rätt att lagra/använda svensk
+historik, bolagshändelser och relevant totalavkastningsbenchmark, därefter
+kostnadskänslig historisk walk-forward innan framåtpapper.
