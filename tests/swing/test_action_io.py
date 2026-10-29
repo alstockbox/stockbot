@@ -13,7 +13,19 @@ import pytest
 
 from stockbot.swing.corporate_actions_io import parse_action_records
 from stockbot.swing.walkforward import WalkForwardConfig, run_walkforward
-from tests.swing.test_walkforward import sample
+
+def sample(n: int = 455) -> pd.DataFrame:
+    """Local deterministic synthetic bars; avoid importing another test module."""
+    days = pd.bdate_range("2023-01-02", periods=n)
+    return pd.DataFrame({
+        "date": days, "symbol": ["TEST"] * n,
+        "open": [60.0 + i * 0.09 for i in range(n)],
+        "high": [61.0 + i * 0.09 for i in range(n)],
+        "low": [59.0 + i * 0.09 for i in range(n)],
+        "close": [60.3 + i * 0.09 for i in range(n)],
+        "volume": [50000] * n,
+    })
+
 
 REPO = Path(__file__).resolve().parents[2]
 
