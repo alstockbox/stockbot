@@ -39,3 +39,15 @@ Installera befintliga projektberoenden och kör hela testsviten: python -m pip i
 
 ## Ansvar
 Assistent: utveckling, verifiering, källkritik, rapportering. Användare: kontobeslut, finansiering, riskgodkännande, tillåten handel. Mäklare: kontobehörighet, prisdata- och ordervillkor.
+
+## Separat SEK-paperledger
+
+Modul: src/stockbot/swing/paper_ledger.py. Den skriver inga riktiga order och kopplar inte till Avanza.
+- Tar emot simulerade orderavslut, sparar beslut-ID, instrument, riktning, antal hela aktier, hypotetiskt pris och avgift i SEK.
+- Avvisar dubbla beslut-ID, överköp utan kassa och försäljningar utan ägda aktier.
+- Lagrar en kontrollsummebaserad hashkedja, verifierar varje tidigare post vid återstart och låser filen mellan processer.
+- Den ursprungliga kassan binds till journalens integritetskontroll. Ett felaktigt ändrat startsaldo stoppar återläsningen.
+- Kräver fullständiga aktuella priser för att beräkna equity med öppna positioner.
+- Ännu inte ansluten till en live-marknadsscheduler, och paper trading har inte påbörjats.
+
+OBS: befintligt StockBot-shadowlager har USD-fält. SEK-paperledgern återanvänder dess beprövade arkitekturprinciper men får aldrig använda USD-saldon som SEK.
