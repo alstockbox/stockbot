@@ -15,7 +15,7 @@ import pandas as pd
 
 from stockbot.swing.data_quality import XSTOProvenance, audit_xsto_data
 from stockbot.swing.engine import SwingConfig, run_swing_backtest
-from stockbot.swing.walkforward import run_walkforward
+from stockbot.swing.walkforward import WalkForwardConfig, run_walkforward
 
 
 def main() -> int:
@@ -41,7 +41,7 @@ def main() -> int:
     if args.walkforward and receipt is None:
         parser.error("--walkforward requires --manifest for XSTO calendar audit")
     if args.walkforward:
-        wf = run_walkforward(frame)
+        wf = run_walkforward(frame, WalkForwardConfig(base=SwingConfig(initial_sek=args.capital_sek)))
         report = wf.to_dict()
         report["data_quality"] = receipt.to_dict()  # type: ignore[union-attr]
         report["orders_sent"] = 0
