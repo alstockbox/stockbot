@@ -105,3 +105,43 @@ orderläggning och kapitalinsättning är fortsatt avstängt.
 **Acceptans för nästa steg:** verifierad rätt att lagra/använda svensk
 historik, bolagshändelser och relevant totalavkastningsbenchmark, därefter
 kostnadskänslig historisk walk-forward innan framåtpapper.
+
+
+## OOS walk-forward och parameterdisciplin — 29 oktober 2026
+
+Ny modul `src/stockbot/swing/walkforward.py`.
+- Standardfönster: **504 handelsdagar träning**, **126 handelsdagar test**,
+  minst **3 kompletta testfönster** (882 sessions inklusive första träningen).
+- Begränsat, på förhand definierat ATR-stopputrymme: **2,0 / 2,5 / 3,0**.
+  Enbart träningsperiodens realiserade hypotetiska nettoresultat minus
+  drawdown-straff får styra vilket alternativ som väljs.
+- OOS-fönstret startar med **tom portfölj** och ett nytt, hypotetiskt
+  saldo. Den får läsa tidigare prisstaplar för indikatorernas uppvärmning
+  men får inte låtsas ha öppnat aktier på träningshistoriken.
+- OOS-dagar påverkar **inte** den foldens modellval. Testet ändrar
+  framtida kursvärden för att kontrollera denna gräns.
+- Testperioderna är kronologiska utan överlappning. Hypotetiska
+  testresultat sätts samman; friktionskänslighet kontrolleras separat vid
+  10 och 30 bps exekveringspåverkan per sida (standard).
+- `first_trade_date` blockerar köp före OOS-perioden även om tekniska
+  signaler finns i träningshistoriken.
+- Resultat = **WALK_FORWARD_BACKTEST_ONLY**, `money_traded_sek=0`,
+  `independent_benchmark_validated=false`,
+  `sufficient_activity_for_live_decision=false`.
+
+Kör först XSTO-granskad historik, sedan walk-forward:
+```bash
+python scripts/run_swing_research.py --csv data/bars.csv \
+  --manifest data/provenance.json --capital-sek 1000 \
+  --walkforward --output reports/xsto-walkforward.json
+```
+
+Detta är **inte** bevis på överavkastning eller tillstånd för paper/live.
+Avsaknaden av verifierade svenska corporate actions, historiskt aktieuniversum,
+databaserad totalavkastningsbenchmark och handelslikviditet kvarstår.
+
+Faktaunderlag att beakta vid datakällsval:
+- Nasdaq Nordic HistoricalView: https://www.nasdaq.com/products/data/nordic-baltic/historicalview
+- Nasdaq Nordics datautbud: https://www.nasdaq.com/products/data/equities/nordic-baltic
+- Yahoo Finance dataanvändning: https://help.yahoo.com/kb/finance/article-exchanges-data-delays-sln2310.html
+- XSTO-kalender i exchange_calendars: https://github.com/gerrymanoim/exchange_calendars
