@@ -30,6 +30,8 @@ class SwingConfig:
     execution_bps_each_side: float = 10.0
     atr_stop_multiple: float = 2.5
     first_trade_date: str | None = None  # OOS: warmup before this date is signal-only
+    min_prior_median_turnover_sek: float = 100_000.0
+    max_daily_volume_fraction: float = 0.02  # pessimistic OHLC volume cap
 
     def __post_init__(self) -> None:
         if not isfinite(self.initial_sek) or self.initial_sek <= 0:
@@ -50,6 +52,10 @@ class SwingConfig:
             raise ValueError("invalid execution_bps_each_side")
         if not (0 < self.atr_stop_multiple <= 10):
             raise ValueError("invalid atr_stop_multiple")
+        if not isfinite(self.min_prior_median_turnover_sek) or self.min_prior_median_turnover_sek < 0:
+            raise ValueError("invalid min_prior_median_turnover_sek")
+        if not isfinite(self.max_daily_volume_fraction) or not (0 < self.max_daily_volume_fraction <= .10):
+            raise ValueError("invalid max_daily_volume_fraction")
         if self.first_trade_date is not None:
             from datetime import date
             try:
@@ -81,12 +87,16 @@ class SwingResult:
     dividend_cash_paid_sek: float = 0.0
     dividend_receivable_sek: float = 0.0
     corporate_action_events: tuple[str, ...] = ()
+    liquidity_rejected_entries: int = 0
+    partial_exit_events: int = 0
+    unresolved_exit_shares: int = 0
 
 
 @dataclass
 class _Position:
     quantity: int
     stop: float
+    exit_pending: str | None = None
 
 
 def _fee(value: float, cfg: SwingConfig) -> float:
@@ -191,6 +201,11 @@ def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None, *,
                 scale_factor.loc[before] *= factor
         features = _indicators(adjusted)
         features["atr_raw"] = features["atr"].to_numpy() / scale_factor.to_numpy()
+        features["prior_median_turnover20"] = (
+            raw_panels[sym]["close"] * raw_panels[sym]["volume"]
+        ).rolling(20, min_periods=20).median()
+        features["prior_median_volume20"] = raw_panels[sym]["volume"].rolling(20, min_periods=20).median()
+        features.loc[raw_panels[sym]["volume"] <= 0, "entry"] = ""
         panels[sym] = features
     cash = cfg.initial_sek
     positions: dict[str, _Position] = {}
@@ -204,6 +219,9 @@ def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None, *,
     receivables: list[tuple[date, float]] = []
     dividend_cash_paid = 0.0
     action_log: list[str] = []
+    partial_exit_events = 0
+    liquidity_rejected_entries = 0
+    last_valid_close: dict[str, float] = {}
 
     for i, today in enumerate(dates):
         previous_day = dates[i - 1] if i else None
@@ -230,18 +248,39 @@ def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None, *,
                 still_owed.append((payment_date, amount))
         receivables = still_owed
         unpaid_dividends = sum(amount for _, amount in receivables)
+        # Retrospective daily volume is used ONLY to bound modeled fills,
+        # never to choose today's signal. This remains an OHLC approximation.
+        remaining_capacity = {
+            symbol: floor(float(raw_panels[symbol].loc[today, "volume"])
+                          * cfg.max_daily_volume_fraction)
+            for symbol in raw_panels
+        }
+        exited_today: set[str] = set()
 
         def sell(symbol: str, raw_price: float, reason: str) -> None:
-            nonlocal cash, fees, impact_sek
-            pos = positions.pop(symbol)
+            nonlocal cash, fees, impact_sek, partial_exit_events
+            pos = positions[symbol]
+            pos.exit_pending = reason
+            q = min(pos.quantity, remaining_capacity[symbol])
+            if q <= 0:
+                return  # pending, must retry next tradable session
             executed = _execution_price(raw_price, False, cfg)
-            value = executed * pos.quantity
+            value = executed * q
             charge = _fee(value, cfg)
+            if charge > value:
+                return  # no fictitious trade with negative proceeds
             cash += value - charge
             fees += charge
-            impact_sek += (raw_price - executed) * pos.quantity
+            impact_sek += (raw_price - executed) * q
+            remaining_capacity[symbol] -= q
+            pos.quantity -= q
+            exited_today.add(symbol)
             fills.append(Fill(today.strftime("%Y-%m-%d"), symbol, "SELL",
-                              pos.quantity, executed, charge, reason))
+                              q, executed, charge, reason))
+            if pos.quantity == 0:
+                del positions[symbol]
+            else:
+                partial_exit_events += 1
 
         # Exit existing positions first: overnight gaps fill at OPEN, not STOP.
         for symbol in sorted(tuple(positions)):
@@ -249,7 +288,9 @@ def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None, *,
             if float(row["volume"]) <= 0:
                 continue  # trading halt: no executable stop/exit
             pos = positions[symbol]
-            if float(row["open"]) <= pos.stop:
+            if pos.exit_pending:
+                sell(symbol, float(row["open"]), "EXIT_RETRY")
+            elif float(row["open"]) <= pos.stop:
                 sell(symbol, float(row["open"]), "GAP_STOP")
             elif previous_day is not None and bool(panels[symbol].loc[previous_day, "exit"]):
                 sell(symbol, float(row["open"]), "TREND_EXIT")
@@ -257,7 +298,11 @@ def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None, *,
                 sell(symbol, pos.stop, "INTRADAY_STOP")
 
         open_equity = cash + unpaid_dividends + sum(
-            p.quantity * float(raw_panels[s].loc[today, "open"])
+            p.quantity * (
+                float(raw_panels[s].loc[today, "open"])
+                if float(raw_panels[s].loc[today, "volume"]) > 0
+                else last_valid_close.get(s, float(raw_panels[s].loc[today, "open"]))
+            )
             for s, p in positions.items()
         )
         peak = max(peak, open_equity)
@@ -270,7 +315,7 @@ def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None, *,
             # or today's high/close.
             candidates: list[tuple[float, str]] = []
             for symbol, panel in panels.items():
-                if symbol in positions:
+                if symbol in positions or symbol in exited_today:
                     continue
                 prior_row = panel.loc[previous_day]
                 if not str(prior_row["entry"]):
@@ -279,9 +324,13 @@ def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None, *,
                 if isfinite(strength):
                     candidates.append((-strength, symbol))
             for _, symbol in sorted(candidates):
-                if symbol in positions or len(positions) >= cfg.max_positions:
+                if symbol in positions or symbol in exited_today or len(positions) >= cfg.max_positions:
                     continue
                 prior = panels[symbol].loc[previous_day]
+                if (not isfinite(float(prior["prior_median_turnover20"])) or
+                        float(prior["prior_median_turnover20"]) < cfg.min_prior_median_turnover_sek):
+                    liquidity_rejected_entries += 1
+                    continue
                 strategy = str(prior["entry"])
                 if not strategy:
                     continue
@@ -299,6 +348,15 @@ def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None, *,
                 budget = min(open_equity * cfg.max_position_weight,
                              open_equity * cfg.risk_per_trade / stop_distance * executed)
                 quantity = floor(budget / executed)
+                # Prior 20-day median volume is known as of the previous close;
+                # current volume only limits hypothetical executions ex post.
+                forecast_capacity = floor(
+                    float(prior["prior_median_volume20"]) * cfg.max_daily_volume_fraction
+                )
+                quantity = min(quantity, forecast_capacity, remaining_capacity[symbol])
+                if quantity < 1:
+                    liquidity_rejected_entries += 1
+                    continue
                 while quantity > 0 and quantity * executed + _fee(quantity * executed, cfg) > cash + 1e-9:
                     quantity -= 1
                 if quantity < 1:
@@ -306,6 +364,7 @@ def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None, *,
                 notional = quantity * executed
                 charge = _fee(notional, cfg)
                 cash -= notional + charge
+                remaining_capacity[symbol] -= quantity
                 fees += charge
                 impact_sek += (executed - raw) * quantity
                 positions[symbol] = _Position(quantity, executed - stop_distance)
@@ -317,7 +376,11 @@ def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None, *,
                     sell(symbol, positions[symbol].stop, "ENTRY_DAY_STOP")
 
         equity = cash + unpaid_dividends + sum(
-            pos.quantity * float(raw_panels[sym].loc[today, "close"])
+            pos.quantity * (
+                float(raw_panels[sym].loc[today, "close"])
+                if float(raw_panels[sym].loc[today, "volume"]) > 0
+                else last_valid_close.get(sym, float(raw_panels[sym].loc[today, "close"]))
+            )
             for sym, pos in positions.items()
         )
         peak = max(peak, equity)
@@ -329,12 +392,20 @@ def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None, *,
         for symbol, pos in positions.items():
             row = panels[symbol].loc[today]
             atr = float(row["atr_raw"])
+            if float(raw_panels[symbol].loc[today, "volume"]) <= 0:
+                continue  # do not update stops from synthetic/stale halt prices
             if isfinite(atr) and atr > 0:
                 pos.stop = max(pos.stop, float(raw_panels[symbol].loc[today, "close"]) - cfg.atr_stop_multiple * atr)
+
+        for symbol, raw in raw_panels.items():
+            if float(raw.loc[today, "volume"]) > 0:
+                last_valid_close[symbol] = float(raw.loc[today, "close"])
 
     equity_series = pd.Series(history, index=pd.DatetimeIndex(dates), name="equity_sek")
     dd = 1 - equity_series / equity_series.cummax().clip(lower=1e-12)
     return SwingResult(equity_series, tuple(fills), float(equity_series.iloc[-1]),
                        float(dd.max()), fees, impact_sek,
                        dividend_cash_paid, sum(amount for _, amount in receivables),
-                       tuple(action_log))
+                       tuple(action_log), liquidity_rejected_entries,
+                       partial_exit_events,
+                       sum(p.quantity for p in positions.values() if p.exit_pending))

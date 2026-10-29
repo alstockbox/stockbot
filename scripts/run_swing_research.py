@@ -24,6 +24,10 @@ def main() -> int:
     parser.add_argument("--csv", type=Path, required=True, help="License-compliant OHLCV CSV")
     parser.add_argument("--manifest", type=Path, help="JSON data provenance; enables XSTO calendar audit")
     parser.add_argument("--capital-sek", type=float, default=1_000.0)
+    parser.add_argument("--min-prior-turnover-sek", type=float, default=100_000.0,
+                        help="Minimum 20-session median SEK daily turnover, previous close only")
+    parser.add_argument("--max-daily-volume-fraction", type=float, default=0.02,
+                        help="Fraction of reported daily share volume available for hypothetical fills")
     parser.add_argument("--actions-json", type=Path, help="Optional audited corporate action events JSON; RAW prices only")
     parser.add_argument("--walkforward", action="store_true", help="Train-only tuning and held-out rolling evaluation; requires --manifest and >=882 sessions")
     parser.add_argument("--output", type=Path, help="Optional JSON report, overwritten if present")
@@ -51,15 +55,20 @@ def main() -> int:
         )
     if args.walkforward and receipt is None:
         parser.error("--walkforward requires --manifest for XSTO calendar audit")
+    cfg = SwingConfig(initial_sek=args.capital_sek,
+                      min_prior_median_turnover_sek=args.min_prior_turnover_sek,
+                      max_daily_volume_fraction=args.max_daily_volume_fraction)
     if args.walkforward:
-        wf = run_walkforward(frame, WalkForwardConfig(base=SwingConfig(initial_sek=args.capital_sek)),
+        wf = run_walkforward(frame, WalkForwardConfig(base=cfg),
                              corporate_actions=corporate_actions)
         report = wf.to_dict()
         report["data_quality"] = receipt.to_dict()  # type: ignore[union-attr]
         report["orders_sent"] = 0
         report["warning"] = "OOS backtest is not independent proof of tradability, profitability, data rights, actions or market impact."
+        report["max_daily_volume_fraction"] = cfg.max_daily_volume_fraction
+        report["min_prior_median_turnover_sek"] = cfg.min_prior_median_turnover_sek
     else:
-        result = run_swing_backtest(frame, SwingConfig(initial_sek=args.capital_sek),
+        result = run_swing_backtest(frame, cfg,
                                     corporate_actions=corporate_actions)
         report = {
         "mode": "BACKTEST_ONLY",
@@ -76,6 +85,11 @@ def main() -> int:
         "commission_sek": round(result.total_fees_sek, 2),
         "execution_impact_sek": round(result.total_execution_impact_sek, 2),
         "hypothetical_fills": len(result.fills),
+        "liquidity_rejected_entries": result.liquidity_rejected_entries,
+        "partial_exit_events": result.partial_exit_events,
+        "unresolved_exit_shares": result.unresolved_exit_shares,
+        "min_prior_median_turnover_sek": cfg.min_prior_median_turnover_sek,
+        "max_daily_volume_fraction": cfg.max_daily_volume_fraction,
         "corporate_action_events": list(result.corporate_action_events),
         "dividends_paid_sek": round(result.dividend_cash_paid_sek, 2),
         "outstanding_dividend_receivable_sek": round(result.dividend_receivable_sek, 2),
