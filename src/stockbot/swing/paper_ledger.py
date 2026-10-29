@@ -67,8 +67,8 @@ def _payload(event: PaperTrade) -> dict[str, object]:
     }
 
 
-def _hash(seq: int, previous: str, payload: dict[str, object]) -> str:
-    raw = json.dumps({"sequence": seq, "previous_hash": previous, "event": payload},
+def _hash(seq: int, previous: str, payload: dict[str, object], initial_cash_sek: float) -> str:
+    raw = json.dumps({"sequence": seq, "previous_hash": previous, "event": payload, "initial_cash_sek": initial_cash_sek},
                      separators=(",", ":"), sort_keys=True, allow_nan=False).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
 
@@ -95,10 +95,10 @@ class SEKPaperLedger:
             rows = self.path.read_text(encoding="utf-8").splitlines()
             for sequence, line in enumerate(rows, 1):
                 row = json.loads(line)
-                if row["sequence"] != sequence or row["previous_hash"] != previous:
+                if row["sequence"] != sequence or row["previous_hash"] != previous or row.get("initial_cash_sek") != self.initial_cash_sek:
                     raise ValueError("paper ledger sequence/hash link mismatch")
                 data = row["event"]
-                if row["entry_hash"] != _hash(sequence, previous, data):
+                if row["entry_hash"] != _hash(sequence, previous, data, self.initial_cash_sek):
                     raise ValueError("paper ledger hash mismatch")
                 event = PaperTrade(
                     decision_id=data["decision_id"],
@@ -153,7 +153,8 @@ class SEKPaperLedger:
                 prior = records[-1]["entry_hash"] if records else GENESIS
                 data = _payload(event)
                 record = {"sequence": sequence, "previous_hash": prior,
-                          "entry_hash": _hash(sequence, prior, data), "event": data}
+                          "initial_cash_sek": self.initial_cash_sek,
+                          "entry_hash": _hash(sequence, prior, data, self.initial_cash_sek), "event": data}
                 with self.path.open("a", encoding="utf-8") as fh:
                     fh.write(json.dumps(record, sort_keys=True, allow_nan=False) + "\n")
                     fh.flush()
