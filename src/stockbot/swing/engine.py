@@ -203,7 +203,19 @@ def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None) -> S
             halted = True  # latch: restart requires explicit review
 
         if previous_day is not None and not halted:
-            for symbol in sorted(panels):
+            # Rank using ONLY prior-close information, never ticker order
+            # or today's high/close.
+            candidates: list[tuple[float, str]] = []
+            for symbol, panel in panels.items():
+                if symbol in positions:
+                    continue
+                prior_row = panel.loc[previous_day]
+                if not str(prior_row["entry"]):
+                    continue
+                strength = float(prior_row["close"]) / float(prior_row["sma50"]) - 1.0
+                if isfinite(strength):
+                    candidates.append((-strength, symbol))
+            for _, symbol in sorted(candidates):
                 if symbol in positions or len(positions) >= cfg.max_positions:
                     continue
                 prior = panels[symbol].loc[previous_day]
