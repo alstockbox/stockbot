@@ -225,6 +225,18 @@ class PaperFeedJournal:
             finally:
                 fcntl.flock(lock, fcntl.LOCK_UN)
 
+    def verified_records(self) -> tuple[dict[str, Any], ...]:
+        """Read-only replay-verified feed, under the journal's shared lock."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.lock.open("a+") as lock:
+            fcntl.flock(lock, fcntl.LOCK_SH)
+            try:
+                # Return independent data so no caller can mutate the replay
+                # structures or accidentally influence subsequent operations.
+                return tuple(json.loads(json.dumps(row)) for row in self._replay())
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+
     def readiness(self, *, required_sessions: int = 205) -> PaperFeedReadiness:
         """Structural fixed-universe indicator readiness, NOT trading approval."""
         if not isinstance(required_sessions, int) or isinstance(required_sessions, bool) or required_sessions < 205:

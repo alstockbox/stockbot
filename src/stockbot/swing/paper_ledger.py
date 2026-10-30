@@ -176,6 +176,32 @@ class SEKPaperLedger:
                                 for symbol, qty in positions.items())
         return PaperBalance(cash, positions, len(rows), equity)
 
+    def find_decision(self, decision_id: str) -> PaperTrade | None:
+        """Verify complete ledger before returning a recorded synthetic fill."""
+        if not isinstance(decision_id, str) or not decision_id.strip():
+            raise ValueError("decision ID required")
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.lock_path.open("a+") as lock:
+            fcntl.flock(lock, fcntl.LOCK_SH)
+            try:
+                _, _, rows = self._replay()
+                for row in rows:
+                    data = row["event"]
+                    if data["decision_id"] == decision_id:
+                        return PaperTrade(
+                            decision_id=data["decision_id"],
+                            timestamp=datetime.fromisoformat(data["timestamp"]),
+                            symbol=data["symbol"], side=data["side"],
+                            quantity=data["quantity"], price_sek=data["price_sek"],
+                            fee_sek=data["fee_sek"]
+                        )
+                return None
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+
+    def has_decision(self, decision_id: str) -> bool:
+        return self.find_decision(decision_id) is not None
+
     def snapshot(self, marks: Mapping[str, float] | None = None) -> PaperBalance:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.lock_path.open("a+") as lock:
