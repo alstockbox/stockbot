@@ -87,12 +87,12 @@ def test_dynamic_universe_cli_cash_delist_without_real_orders(tmp_path):
     assert len(report["lifecycle_events"]) == 1
 
 
-def test_dynamic_walkforward_remains_blocked_until_fold_level_lifecycle_logic(tmp_path):
+def test_dynamic_walkforward_with_too_few_sessions_blocks_without_phantom_trades(tmp_path):
     csv,manifest,universe,settlement=_inputs(tmp_path)
     p=run("--csv",csv,"--manifest",manifest,"--universe-json",universe,
           "--settlements-json",settlement,"--walkforward")
     assert p.returncode!=0
-    assert "dynamic IPO/delist walk-forward not yet supported" in p.stderr
+    assert "insufficient complete sessions for OOS" in p.stderr
 
 
 def test_settlement_file_cannot_be_submitted_without_universe(tmp_path):
@@ -101,3 +101,14 @@ def test_settlement_file_cannot_be_submitted_without_universe(tmp_path):
           "--settlements-json",settlement)
     assert p.returncode!=0
     assert "requires --universe-json" in p.stderr
+
+
+def test_lifecycle_cli_rejects_adjusted_price_basis_before_simulating(tmp_path):
+    csv,manifest,universe,settlement=_inputs(tmp_path)
+    raw=json.loads(manifest.read_text(encoding="utf-8"))
+    raw["price_basis"]="SPLIT_ADJUSTED"
+    manifest.write_text(json.dumps(raw),encoding="utf-8")
+    p=run("--csv",csv,"--manifest",manifest,"--universe-json",universe,
+          "--settlements-json",settlement)
+    assert p.returncode!=0
+    assert "requires price_basis=RAW" in p.stderr

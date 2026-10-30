@@ -28,8 +28,12 @@ number of consecutive XSTO sessions.
 - Synthetic regression tests reject expanding-window regressions and
   reject tuning on the same future OOS observations.
 
-**Not completed:** dynamic IPO/delisting fold-aware backtesting, licensed
-historical Swedish equities, non-survivor historical constituents, split
-cash adjustments outside the supported action types, independently verified
-GI benchmark history, true auction pricing, real paper-forward outcomes and
-broker execution permissions. No automated funding or live trading.
+**Now supported:** dynamic IPO and CASH_ONLY delisting fold-aware
+research, with cutoff-projected instrument status and historical payout
+evidence (details in `swing-dynamic-walkforward.md`).
+
+**Not completed:** independently licensed Swedish equities, verified
+survivor-free historical constituents, unsupported settlement types and
+splits, independently validated GI benchmark history, auction execution,
+real paper-forward outcomes, and approved broker order permissions.
+No automated funding or live trading.

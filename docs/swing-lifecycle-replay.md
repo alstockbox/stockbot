@@ -75,10 +75,11 @@ structural `universe_audit` receipt. All reports retain
 
 ## Deliberately blocked / incomplete
 
-- **Dynamic-universe walk-forward is not yet supported.** Using
-  `--walkforward` with IPO/delisting transitions fails closed.
-  It requires fold-scoped, nonleaking universe provenance and settlement
-  handling before it can be accepted for OOS testing.
+- **Dynamic-universe walk-forward is now supported for CASH_ONLY
+  settlement research.** It uses fold-scoped historic universe and
+  settlement views, not future delisting dates or synthetic OHLC padding.
+  Independent market-data provenance and true point-in-time completeness
+  remain NOT VERIFIED. See `swing-dynamic-walkforward.md`.
 - Mergers involving shares, spin-offs, renaming/ISIN reuse, rights issues,
   multiple share classes, compulsory redemptions, unrecorded bankruptcies,
   tax withholding, unverifiable payouts and record-date uncertainty.

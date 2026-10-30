@@ -54,13 +54,15 @@ independently detected using its own self-reported universe list.
 `historical_universe_independently_verified=false` always. Independent
 time-stamped records from the data vendor are mandatory.
 
-**Do not bypass the simulator limitation:** The current swing engine
-requires symbols to appear in every trading session. A valid historical
-IPO/delisting audit may therefore pass while
-`compatible_with_current_fixed_panel_engine=false`.
-`run_swing_research.py --universe-json` refuses such a replay.
-No synthetic fill, padded price or forced liquidation is fabricated.
-A proper event-driven lifecycle/settlement engine is P0 next.
+**Life-cycle support was added after this initial audit.** The legacy
+fixed-panel engine still needs synchronized symbols, but explicit
+`--universe-json` plus documented `--settlements-json` (CASH_ONLY)
+enables research-only historical IPO/delisting replay. Dynamic rolling
+`--walkforward` was subsequently added with fold-scoped as-of records.
+`compatible_with_current_fixed_panel_engine=false` only describes
+incompatibility with the *old* fixed-panel mode, not a blocked dynamic
+research run. See `swing-dynamic-walkforward.md`. Missing outcomes or
+non-cash consideration still fail closed.
 
 ### Independent OMX index comparison
 

@@ -61,6 +61,8 @@ def main() -> int:
         if not isinstance(raw, dict):
             parser.error("data manifest must be a JSON object")
         provenance = XSTOProvenance.from_dict(raw)
+        if args.universe_json is not None and provenance.price_basis != "RAW":
+            parser.error("historical lifecycle replay requires price_basis=RAW")
         if args.universe_json is not None:
             if not args.universe_json.is_file():
                 parser.error("universe JSON file does not exist")
@@ -71,11 +73,6 @@ def main() -> int:
                 frame, universe_records,
                 collected_at_utc=provenance.collected_at_utc,
             )
-            if args.walkforward and not universe_receipt.compatible_with_current_fixed_panel_engine:
-                parser.error(
-                    "dynamic IPO/delist walk-forward not yet supported; "
-                    "only standalone backtesting with complete cash-settlement data"
-                )
         # Fixed-panel data uses synchronized OHLCV checks. Dynamic listing
         # history instead uses the lifecycle auditor, which independently
         # checks each instrument's XSTO session coverage without padding bars.
@@ -98,16 +95,26 @@ def main() -> int:
         corporate_actions = parse_action_records(
             json.loads(args.actions_json.read_text(encoding="utf-8"))
         )
-    if args.walkforward and receipt is None:
-        parser.error("--walkforward requires --manifest for XSTO calendar audit")
+    if args.walkforward and receipt is None and universe_receipt is None:
+        parser.error("--walkforward requires --manifest and an XSTO audit")
     cfg = SwingConfig(initial_sek=args.capital_sek,
                       min_prior_median_turnover_sek=args.min_prior_turnover_sek,
                       max_daily_volume_fraction=args.max_daily_volume_fraction)
     if args.walkforward:
-        wf = run_walkforward(frame, WalkForwardConfig(base=cfg),
-                             corporate_actions=corporate_actions)
+        wf = run_walkforward(
+            frame, WalkForwardConfig(base=cfg),
+            corporate_actions=corporate_actions,
+            universe=universe_records, settlements=settlement_records,
+            collected_at_utc=(
+                provenance.collected_at_utc if universe_records is not None else None
+            ),
+        )
         report = wf.to_dict()
-        report["data_quality"] = receipt.to_dict()  # type: ignore[union-attr]
+        report["data_quality"] = receipt.to_dict() if receipt else {
+            "status": "STRUCTURAL_LIFECYCLE_ONLY_UNVERIFIED",
+            "license_independently_verified": False,
+            "order_execution_permitted": False,
+        }
         report["orders_sent"] = 0
         report["universe_audit"] = universe_receipt.to_dict() if universe_receipt else {
             "status": "NOT_AUDITED", "survivorship_independently_verified": False
