@@ -1,4 +1,4 @@
-"""E2E CLI: only reconstructs synthetic past sessions, never orders."""
+"""Self-contained E2E CLI tests, compatible with isolated pytest/Linux import."""
 from __future__ import annotations
 
 from datetime import timedelta
@@ -7,10 +7,45 @@ from pathlib import Path
 import subprocess
 import sys
 
-from tests.swing.test_paper_rehearsal import env, stage, dates
+import exchange_calendars as xcals
+import pandas as pd
+
+from stockbot.swing.paper_feed import PaperBar, PaperSession, PaperFeedJournal
+from stockbot.swing.paper_ledger import SEKPaperLedger
+from stockbot.swing.paper_rehearsal import SyntheticPaperWorkflow
 
 ROOT=Path(__file__).resolve().parents[2]
 SCRIPT=ROOT/"scripts"/"rehearse_swing_paper.py"
+
+
+def fixture(tmp_path):
+    feed_path=tmp_path/"feed.jsonl"
+    workflow=SyntheticPaperWorkflow(
+        feed_path=feed_path,
+        intents_path=tmp_path/"intents.jsonl",
+        fills_path=tmp_path/"fills.jsonl",
+    )
+    return workflow, PaperFeedJournal(feed_path), SEKPaperLedger(tmp_path/"fills.jsonl")
+
+
+def trading_days():
+    cal=xcals.get_calendar("XSTO")
+    first=pd.Timestamp("2025-01-02")
+    second=cal.next_session(first)
+    return first.date(),second.date()
+
+
+def stage(feed, day, price=100):
+    closed=xcals.get_calendar("XSTO").session_close(pd.Timestamp(day)).to_pydatetime()
+    observed=closed+timedelta(minutes=20)
+    event=PaperSession(
+        session=day, observed_at_utc=observed,
+        source_kind="SYNTHETIC_TEST_ONLY",
+        source_reference="synthetic:isolated_ci_fixture",
+        bars=(PaperBar("AAA",price,price+2,price-2,price+1,10000),),
+    )
+    feed.stage(event,clock_utc=observed+timedelta(minutes=1))
+    return event
 
 
 def cli(work, *extra):
@@ -24,12 +59,12 @@ def cli(work, *extra):
 
 
 def test_cli_reconstructs_one_hypothetical_fill_without_account_access(tmp_path):
-    work,feed,ledger=env(tmp_path)
-    first,second,_=dates()
+    work,feed,ledger=fixture(tmp_path)
+    first,second=trading_days()
     a=stage(feed,first,100)
     intent=work.plan(symbol="AAA",side="BUY",quantity=1,
                      clock_utc=a.observed_at_utc+timedelta(minutes=1))
-    b=stage(feed,second,104)
+    stage(feed,second,104)
     output=cli(work,"--reconcile")
     assert output.returncode==0,output.stderr
     result=json.loads(output.stdout)
@@ -47,8 +82,8 @@ def test_cli_reconstructs_one_hypothetical_fill_without_account_access(tmp_path)
 
 
 def test_cli_cannot_generate_historically_backdated_new_signal(tmp_path):
-    work,feed,ledger=env(tmp_path)
-    stage(feed,dates()[0])
+    work,feed,ledger=fixture(tmp_path)
+    stage(feed,trading_days()[0])
     result=cli(work,"--plan","--symbol","AAA","--side","BUY","--quantity","1")
     assert result.returncode!=0
     assert "decision created after target market opened" in result.stderr
@@ -57,7 +92,7 @@ def test_cli_cannot_generate_historically_backdated_new_signal(tmp_path):
 
 
 def test_cli_rejects_missing_plan_details(tmp_path):
-    work,feed,ledger=env(tmp_path)
+    work,feed,ledger=fixture(tmp_path)
     result=cli(work,"--plan","--symbol","AAA")
     assert result.returncode!=0
     assert "--plan requires" in result.stderr
