@@ -17,6 +17,7 @@ from stockbot.swing.data_quality import XSTOProvenance, audit_xsto_data
 from stockbot.swing.benchmark import IndexProvenance, compare_oos_to_index
 from stockbot.swing.universe import parse_universe_records, audit_instrument_history
 from stockbot.swing.corporate_actions_io import parse_action_records
+from stockbot.swing.lifecycle import parse_settlements
 from stockbot.swing.engine import SwingConfig, run_swing_backtest
 from stockbot.swing.walkforward import WalkForwardConfig, run_walkforward
 
@@ -32,6 +33,7 @@ def main() -> int:
                         help="Fraction of reported daily share volume available for hypothetical fills")
     parser.add_argument("--actions-json", type=Path, help="Optional audited corporate action events JSON; RAW prices only")
     parser.add_argument("--universe-json", type=Path, help="Optional exact historical instrument-lifecycle manifest")
+    parser.add_argument("--settlements-json", type=Path, help="Required cash-only delisting settlements when historical instruments end")
     parser.add_argument("--benchmark-csv", type=Path, help="Authorized Swedish GI index date,close CSV; requires --walkforward")
     parser.add_argument("--benchmark-manifest", type=Path, help="Index rights and collection provenance JSON")
     parser.add_argument("--walkforward", action="store_true", help="Train-only tuning and held-out rolling evaluation; requires --manifest and >=882 sessions")
@@ -46,8 +48,12 @@ def main() -> int:
         parser.error("benchmark comparison requires --walkforward")
     if args.universe_json is not None and args.manifest is None:
         parser.error("--universe-json requires --manifest")
+    if args.settlements_json is not None and args.universe_json is None:
+        parser.error("--settlements-json requires --universe-json and --manifest")
     receipt = None
     universe_receipt = None
+    universe_records = None
+    settlement_records = ()
     if args.manifest is not None:
         if not args.manifest.is_file():
             parser.error("data manifest does not exist")
@@ -58,22 +64,34 @@ def main() -> int:
         if args.universe_json is not None:
             if not args.universe_json.is_file():
                 parser.error("universe JSON file does not exist")
+            universe_records = parse_universe_records(json.loads(
+                args.universe_json.read_text(encoding="utf-8")
+            ))
             universe_receipt = audit_instrument_history(
-                frame,
-                parse_universe_records(json.loads(
-                    args.universe_json.read_text(encoding="utf-8")
-                )),
+                frame, universe_records,
                 collected_at_utc=provenance.collected_at_utc,
             )
-            if not universe_receipt.compatible_with_current_fixed_panel_engine:
+            if args.walkforward and not universe_receipt.compatible_with_current_fixed_panel_engine:
                 parser.error(
-                    "historical IPO/delisting transitions detected: fixed-panel "
-                    "backtest prohibited; run scripts/audit_swing_universe.py instead"
+                    "dynamic IPO/delist walk-forward not yet supported; "
+                    "only standalone backtesting with complete cash-settlement data"
                 )
-        receipt = audit_xsto_data(frame, provenance)  # mandatory before backtest
+        # Fixed-panel data uses synchronized OHLCV checks. Dynamic listing
+        # history instead uses the lifecycle auditor, which independently
+        # checks each instrument's XSTO session coverage without padding bars.
+        if universe_receipt is None or universe_receipt.compatible_with_current_fixed_panel_engine:
+            receipt = audit_xsto_data(frame, provenance)
+    if args.settlements_json is not None:
+        if not args.settlements_json.is_file():
+            parser.error("delisting settlements JSON file does not exist")
+        if provenance.price_basis != "RAW":
+            parser.error("--settlements-json requires price_basis=RAW")
+        settlement_records = parse_settlements(json.loads(
+            args.settlements_json.read_text(encoding="utf-8")
+        ))
     corporate_actions = ()
     if args.actions_json is not None:
-        if receipt is None or provenance.price_basis != "RAW":
+        if (receipt is None and universe_receipt is None) or provenance.price_basis != "RAW":
             parser.error("--actions-json requires an XSTO --manifest with price_basis=RAW")
         if not args.actions_json.is_file():
             parser.error("corporate actions JSON file does not exist")
@@ -108,8 +126,13 @@ def main() -> int:
         report["max_daily_volume_fraction"] = cfg.max_daily_volume_fraction
         report["min_prior_median_turnover_sek"] = cfg.min_prior_median_turnover_sek
     else:
-        result = run_swing_backtest(frame, cfg,
-                                    corporate_actions=corporate_actions)
+        result = run_swing_backtest(
+            frame, cfg, corporate_actions=corporate_actions,
+            universe=universe_records, settlements=settlement_records,
+            collected_at_utc=(
+                provenance.collected_at_utc if universe_records is not None else None
+            ),
+        )
         report = {
         "mode": "BACKTEST_ONLY",
         "orders_sent": 0,
@@ -118,7 +141,12 @@ def main() -> int:
             "status": "NOT_AUDITED", "survivorship_independently_verified": False
         },
         "data_quality": receipt.to_dict() if receipt else {
-            "status": "NOT_AUDITED", "order_execution_permitted": False
+            "status": (
+                "STRUCTURAL_LIFECYCLE_ONLY_UNVERIFIED"
+                if universe_receipt else "NOT_AUDITED"
+            ),
+            "license_independently_verified": False,
+            "order_execution_permitted": False,
         },
         "warning": "Data license, split/dividend events, delistings, historical universe, benchmark and executable fills are NOT independently validated.",
         "capital_initial_sek": args.capital_sek,
@@ -131,6 +159,10 @@ def main() -> int:
         "liquidity_rejected_entries": result.liquidity_rejected_entries,
         "partial_exit_events": result.partial_exit_events,
         "unresolved_exit_shares": result.unresolved_exit_shares,
+        "lifecycle_events": list(result.lifecycle_events),
+        "delisted_shares": result.delisted_shares,
+        "delist_cash_paid_sek": round(result.delist_cash_paid_sek, 2),
+        "delist_receivable_sek": round(result.delist_receivable_sek, 2),
         "min_prior_median_turnover_sek": cfg.min_prior_median_turnover_sek,
         "max_daily_volume_fraction": cfg.max_daily_volume_fraction,
         "corporate_action_events": list(result.corporate_action_events),

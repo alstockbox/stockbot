@@ -129,3 +129,12 @@ def test_future_disclosure_not_retroactively_known_in_data_snapshot():
             data, (records[0], edited),
             collected_at_utc="2026-10-29T22:00:00Z"
         )
+
+def test_universe_audit_does_not_skip_an_entire_market_session():
+    data, days, records = fixture()
+    missing_whole_day = data[data["date"] != days[125]]
+    with pytest.raises(ValueError, match="uncovered XSTO sessions"):
+        audit_instrument_history(
+            missing_whole_day, records,
+            collected_at_utc="2026-10-29T22:00:00Z"
+        )

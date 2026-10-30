@@ -79,7 +79,7 @@ def test_trading_research_cli_rejects_uneven_lifecycles(tmp_path):
     p = _run("run_swing_research.py", "--csv", csv,
              "--universe-json", universe, "--manifest", manifest)
     assert p.returncode != 0
-    assert "fixed-panel backtest prohibited" in p.stderr
+    assert "missing or unexpected delisting cash settlement" in p.stderr
 
 
 def test_cli_refuses_unsourced_benchmark_or_market_data_without_audit(tmp_path):

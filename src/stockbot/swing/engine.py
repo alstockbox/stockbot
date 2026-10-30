@@ -9,7 +9,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from math import floor, isfinite
-from typing import Literal
+from typing import Literal, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from stockbot.swing.universe import InstrumentHistory
+    from stockbot.swing.lifecycle import DelistingSettlement
 
 import pandas as pd
 
@@ -90,6 +94,10 @@ class SwingResult:
     liquidity_rejected_entries: int = 0
     partial_exit_events: int = 0
     unresolved_exit_shares: int = 0
+    lifecycle_events: tuple[str, ...] = ()
+    delisted_shares: int = 0
+    delist_cash_paid_sek: float = 0.0
+    delist_receivable_sek: float = 0.0
 
 
 @dataclass
@@ -169,8 +177,13 @@ def _indicators(frame: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None, *,
-                       corporate_actions: tuple[CorporateAction, ...] = ()) -> SwingResult:
+def run_swing_backtest(
+    frame: pd.DataFrame, cfg: SwingConfig | None = None, *,
+    corporate_actions: tuple[CorporateAction, ...] = (),
+    universe: tuple[InstrumentHistory, ...] | None = None,
+    settlements: tuple[DelistingSettlement, ...] = (),
+    collected_at_utc: str | None = None,
+) -> SwingResult:
     """Simulate next-open entries/exits, gap-aware stop exits, and whole-share fills.
 
     Signal at previous CLOSE; next OPEN execution. Stop checks use the current
@@ -178,7 +191,31 @@ def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None, *,
     approximate OHLC execution, not proof of executable intraday fills.
     """
     cfg = cfg or SwingConfig()
-    clean = validate_ohlcv(frame)
+    if universe is None:
+        if settlements:
+            raise ValueError("settlements require audited instrument universe")
+        clean = validate_ohlcv(frame)
+        settlements_by_symbol = {}
+    else:
+        if collected_at_utc is None:
+            raise ValueError("lifecycle replay requires data collection as-of")
+        # Dynamic listing and delisting sequences need a strong as-of
+        # structural audit BEFORE any performance results are computed.
+        from stockbot.swing.universe import audit_instrument_history
+        from stockbot.swing.lifecycle import match_settlements
+        receipt = audit_instrument_history(
+            frame, universe, collected_at_utc=collected_at_utc
+        )
+        clean = frame[list(sorted(REQUIRED))].copy()
+        clean["date"] = pd.to_datetime(clean["date"], errors="raise")
+        clean = clean.sort_values(["date", "symbol"]).reset_index(drop=True)
+        dates_count = clean["date"].nunique()
+        if dates_count < 205:
+            raise ValueError("at least 205 XSTO sessions required for lifecycle replay")
+        settlements_by_symbol = match_settlements(
+            universe, settlements, first_session=clean["date"].min().date(),
+            last_session=clean["date"].max().date()
+        )
     dates = list(pd.DatetimeIndex(clean["date"].drop_duplicates().sort_values()))
     actions_by_date = validate_actions(
         corporate_actions, symbols=set(clean["symbol"]),
@@ -207,6 +244,15 @@ def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None, *,
         features["prior_median_volume20"] = raw_panels[sym]["volume"].rolling(20, min_periods=20).median()
         features.loc[raw_panels[sym]["volume"] <= 0, "entry"] = ""
         panels[sym] = features
+    # Corporate action must match the instrument's own tradeable lifespan,
+    # not just a day when some other instrument was available.
+    for event in corporate_actions:
+        if pd.Timestamp(event.ex_date) not in raw_panels[event.symbol].index:
+            raise ValueError("corporate action outside instrument listing lifespan")
+    # Multiple delistings may happen on the same trading session.
+    delist_events_by_date: dict[date, list[DelistingSettlement]] = {}
+    for event in settlements_by_symbol.values():
+        delist_events_by_date.setdefault(event.last_session, []).append(event)
     cash = cfg.initial_sek
     positions: dict[str, _Position] = {}
     history: list[float] = []
@@ -222,6 +268,10 @@ def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None, *,
     partial_exit_events = 0
     liquidity_rejected_entries = 0
     last_valid_close: dict[str, float] = {}
+    delist_receivables: list[tuple[date, float]] = []
+    delist_cash_paid = 0.0
+    delisted_shares = 0
+    lifecycle_log: list[str] = []
 
     for i, today in enumerate(dates):
         previous_day = dates[i - 1] if i else None
@@ -248,11 +298,21 @@ def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None, *,
                 still_owed.append((payment_date, amount))
         receivables = still_owed
         unpaid_dividends = sum(amount for _, amount in receivables)
+        outstanding_settlements: list[tuple[date, float]] = []
+        for payment_date, amount in delist_receivables:
+            if payment_date <= today.date():
+                cash += amount
+                delist_cash_paid += amount
+            else:
+                outstanding_settlements.append((payment_date, amount))
+        delist_receivables = outstanding_settlements
+        unpaid_settlements = sum(amount for _, amount in delist_receivables)
         # Retrospective daily volume is used ONLY to bound modeled fills,
         # never to choose today's signal. This remains an OHLC approximation.
         remaining_capacity = {
-            symbol: floor(float(raw_panels[symbol].loc[today, "volume"])
-                          * cfg.max_daily_volume_fraction)
+            symbol: (floor(float(raw_panels[symbol].loc[today, "volume"])
+                           * cfg.max_daily_volume_fraction)
+                     if today in raw_panels[symbol].index else 0)
             for symbol in raw_panels
         }
         exited_today: set[str] = set()
@@ -284,6 +344,8 @@ def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None, *,
 
         # Exit existing positions first: overnight gaps fill at OPEN, not STOP.
         for symbol in sorted(tuple(positions)):
+            if today not in raw_panels[symbol].index:
+                raise ValueError("holding without listing bar or completed delist settlement")
             row = raw_panels[symbol].loc[today]
             if float(row["volume"]) <= 0:
                 continue  # trading halt: no executable stop/exit
@@ -297,7 +359,7 @@ def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None, *,
             elif float(row["low"]) <= pos.stop:
                 sell(symbol, pos.stop, "INTRADAY_STOP")
 
-        open_equity = cash + unpaid_dividends + sum(
+        open_equity = cash + unpaid_dividends + unpaid_settlements + sum(
             p.quantity * (
                 float(raw_panels[s].loc[today, "open"])
                 if float(raw_panels[s].loc[today, "volume"]) > 0
@@ -317,6 +379,10 @@ def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None, *,
             for symbol, panel in panels.items():
                 if symbol in positions or symbol in exited_today:
                     continue
+                if previous_day not in panel.index or today not in panel.index:
+                    continue  # pre-IPO, post-delisting or first listed session
+                if symbol in settlements_by_symbol and today.date() >= settlements_by_symbol[symbol].last_session:
+                    continue  # no new position on final tradable day
                 prior_row = panel.loc[previous_day]
                 if not str(prior_row["entry"]):
                     continue
@@ -375,7 +441,20 @@ def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None, *,
                 if float(market["low"]) <= positions[symbol].stop:
                     sell(symbol, positions[symbol].stop, "ENTRY_DAY_STOP")
 
-        equity = cash + unpaid_dividends + sum(
+        # Cash-only delisting is NOT a SELL at the final market price.
+        # Remove held shares after the last tradable close, and recognize
+        # only the documented per-share cash entitlement. If payout is
+        # zero, account for complete loss; no phantom last-price proceeds.
+        for event in sorted(delist_events_by_date.get(today.date(), ()), key=lambda e: e.symbol):
+            holding = positions.pop(event.symbol, None)
+            if holding is not None:
+                amount = holding.quantity * event.cash_per_share_sek
+                delisted_shares += holding.quantity
+                delist_receivables.append((event.pay_date, amount))
+                unpaid_settlements += amount
+            lifecycle_log.append(f"{today.date()}:{event.symbol}:DELISTED_CASH_ONLY")
+
+        equity = cash + unpaid_dividends + unpaid_settlements + sum(
             pos.quantity * (
                 float(raw_panels[sym].loc[today, "close"])
                 if float(raw_panels[sym].loc[today, "volume"]) > 0
@@ -398,7 +477,7 @@ def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None, *,
                 pos.stop = max(pos.stop, float(raw_panels[symbol].loc[today, "close"]) - cfg.atr_stop_multiple * atr)
 
         for symbol, raw in raw_panels.items():
-            if float(raw.loc[today, "volume"]) > 0:
+            if today in raw.index and float(raw.loc[today, "volume"]) > 0:
                 last_valid_close[symbol] = float(raw.loc[today, "close"])
 
     equity_series = pd.Series(history, index=pd.DatetimeIndex(dates), name="equity_sek")
@@ -408,4 +487,6 @@ def run_swing_backtest(frame: pd.DataFrame, cfg: SwingConfig | None = None, *,
                        dividend_cash_paid, sum(amount for _, amount in receivables),
                        tuple(action_log), liquidity_rejected_entries,
                        partial_exit_events,
-                       sum(p.quantity for p in positions.values() if p.exit_pending))
+                       sum(p.quantity for p in positions.values() if p.exit_pending),
+                       tuple(lifecycle_log), delisted_shares, delist_cash_paid,
+                       sum(amount for _, amount in delist_receivables))

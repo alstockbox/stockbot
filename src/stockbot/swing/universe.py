@@ -148,9 +148,11 @@ def audit_instrument_history(
         first, last
     )).tz_localize(None).normalize()
     all_dates = set(sessions)
-    present_dates = pd.DatetimeIndex(df["date"].unique())
+    present_dates = pd.DatetimeIndex(df["date"].unique()).sort_values()
     if len(present_dates.difference(sessions)):
         raise ValueError("bars contain non-XSTO date")
+    if not present_dates.equals(sessions):
+        raise ValueError("universe has uncovered XSTO sessions")
     refs = {r.symbol: r for r in records}
     if len(refs) != len(records) or len({r.isin for r in records}) != len(records):
         raise ValueError("duplicate universe symbol/ISIN")
