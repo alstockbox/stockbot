@@ -44,6 +44,7 @@ class WalkForwardConfig:
 @dataclass(frozen=True)
 class WalkForwardFold:
     number: int
+    train_start: str
     train_end: str
     test_start: str
     test_end: str
@@ -94,11 +95,21 @@ def run_walkforward(frame: pd.DataFrame, config: WalkForwardConfig | None = None
     fold_trades = 0
 
     for split in range(cfg.train_sessions, len(dates) - cfg.test_sessions + 1, cfg.test_sessions):
-        train = clean[clean["date"] <= dates[split - 1]]
+        train_start_idx = split - cfg.train_sessions
+        train_first = dates[train_start_idx]
+        train_end = dates[split - 1]
+        train = clean[(clean["date"] >= train_first) & (clean["date"] <= train_end)]
         through_test = clean[clean["date"] <= dates[split + cfg.test_sessions - 1]]
-        train_actions = tuple(e for e in corporate_actions if e.ex_date <= dates[split - 1].date())
-        test_actions = tuple(e for e in corporate_actions if e.ex_date <= dates[split + cfg.test_sessions - 1].date())
-        training_trade_start = dates[200].strftime("%Y-%m-%d")
+        # Events outside this fold's history are NOT eligible inputs.
+        train_actions = tuple(
+            e for e in corporate_actions
+            if train_first.date() <= e.ex_date <= train_end.date()
+        )
+        test_actions = tuple(
+            e for e in corporate_actions
+            if e.ex_date <= dates[split + cfg.test_sessions - 1].date()
+        )
+        training_trade_start = dates[train_start_idx + 200].strftime("%Y-%m-%d")
         test_trade_start = dates[split].strftime("%Y-%m-%d")
         # Candidate tuning uses TRAIN window only; no test P&L in selection.
         candidates: list[tuple[float, float, float]] = []
@@ -139,7 +150,8 @@ def run_walkforward(frame: pd.DataFrame, config: WalkForwardConfig | None = None
         fold_trades += len(tested.fills)
         folds.append(WalkForwardFold(
             number=len(folds) + 1,
-            train_end=dates[split - 1].strftime("%Y-%m-%d"),
+            train_start=train_first.strftime("%Y-%m-%d"),
+            train_end=train_end.strftime("%Y-%m-%d"),
             test_start=test_trade_start,
             test_end=dates[split + cfg.test_sessions - 1].strftime("%Y-%m-%d"),
             chosen_atr_stop_multiple=chosen,

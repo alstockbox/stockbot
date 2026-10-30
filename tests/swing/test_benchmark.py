@@ -20,6 +20,7 @@ def specimen():
     for start_i in (5, 25):
         folds.append(WalkForwardFold(
             number=len(folds)+1,
+            train_start=str(days[0].date()),
             train_end=str(days[start_i-1].date()),
             test_start=str(days[start_i].date()),
             test_end=str(days[start_i+19].date()),

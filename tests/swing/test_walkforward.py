@@ -39,6 +39,12 @@ def test_walkforward_reports_complete_nonoverlapping_oos_without_orders():
         assert set(fold.cost_stress_returns_pct) == {"5bps", "30bps"}
         if idx:
             assert res.folds[idx - 1].test_end < fold.test_start
+    # Each fold uses EXACTLY train_sessions, never an expanding window.
+    all_dates = pd.bdate_range("2023-01-02", periods=455)
+    for idx, fold in enumerate(res.folds):
+        offset = idx * short_config().test_sessions
+        assert fold.train_start == str(all_dates[offset].date())
+        assert fold.train_end == str(all_dates[offset + 251].date())
     assert len(res.data_sha256) == 64
     assert res.total_hypothetical_fills >= 0
 
