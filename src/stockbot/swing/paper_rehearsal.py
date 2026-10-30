@@ -194,7 +194,9 @@ class SyntheticPaperWorkflow:
         return None
 
     def plan(self, *, symbol: str, side: Side, quantity: int, clock_utc: datetime,
-             commission_pct: float = 0.005, min_commission_sek: float = 3.0):
+             commission_pct: float = 0.005, min_commission_sek: float = 3.0,
+             expected_source_entry_sha256: str | None = None,
+             expected_source_session: date | None = None):
         """Persist before next open. Never observes the next session's bar."""
         clock = _utc(clock_utc)
         self.intents_path.parent.mkdir(parents=True, exist_ok=True)
@@ -207,6 +209,14 @@ class SyntheticPaperWorkflow:
                     raise ValueError("no prior synthetic daily session")
                 source_day = max(feed)
                 source = feed[source_day]
+                # Auto-signal preview is only useful if the exact source
+                # record remains unchanged during the planning transaction.
+                if (expected_source_entry_sha256 is not None
+                    and expected_source_entry_sha256 != source["entry_hash"]):
+                    raise ValueError("SIGNAL_SOURCE_HASH_CHANGED")
+                if (expected_source_session is not None
+                    and expected_source_session != source_day):
+                    raise ValueError("SIGNAL_SOURCE_SESSION_CHANGED")
                 if _parse_utc(source["session"]["observed_at_utc"]) > clock:
                     raise ValueError("source bar was not observed at decision time")
                 if self._find_bar(source, symbol) is None:
