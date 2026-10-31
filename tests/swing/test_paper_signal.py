@@ -137,7 +137,10 @@ def test_reconciled_drop_triggers_sell_before_capital_loss_gate(tmp_path,source_
     event=PaperSession(
         next_session.date(),at,"SYNTHETIC_TEST_ONLY",
         "synthetic:gap_down_test",
-        (PaperBar("AAA",36.0,38.0,35.0,36.5,20000),)
+        # The next OPEN itself is within the precommitted risk envelope;
+        # an intraday collapse after that OPEN is only visible at EOD.
+        (PaperBar("AAA",buy.last_close_sek,
+                  buy.last_close_sek+1.0,35.0,36.5,20000),)
     )
     work.feed.stage(event,clock_utc=at+timedelta(minutes=1))
     report=work.reconcile(clock_utc=at+timedelta(minutes=2))
@@ -210,3 +213,94 @@ def test_cli_preview_is_nonmutating_and_cannot_stage_old_sessions(tmp_path,sourc
     assert old_stage.returncode==0,old_stage.stderr
     assert json.loads(old_stage.stdout)["status"]=="EXPIRED_SOURCE"
     assert not work.intents_path.exists()
+
+
+@pytest.mark.parametrize("scenario,expected", [
+    ("position_cap", "REJECTED_NEXT_OPEN_POSITION_LIMIT"),
+    ("stop_risk", "REJECTED_NEXT_OPEN_STOP_RISK"),
+    ("below_stop", "REJECTED_NEXT_OPEN_BELOW_PLANNED_STOP"),
+])
+def test_gap_open_rejections_are_deterministic_and_book_no_cash(
+    tmp_path, source_fixture, scenario, expected
+):
+    engine, work, days, now = setup(tmp_path, source_fixture)
+    candidate = engine.stage(clock_utc=now)
+    assert candidate.staged_decision_id is not None
+    recorded = work._replay_intents()
+    assert len(recorded) == 1
+    original = recorded[0]["intent"]
+    assert original["max_buy_notional_sek"] == candidate.position_limit_sek
+    assert original["max_buy_risk_sek"] == round(
+        candidate.estimated_equity_sek * engine.cfg.risk_per_trade, 6
+    )
+    stop = original["reference_stop_sek"]
+    shares = candidate.quantity
+    if scenario == "position_cap":
+        opening = original["max_buy_notional_sek"] / shares + 15
+    elif scenario == "stop_risk":
+        # This open must stay under the position value limit while
+        # breaching the stop-loss budget inclusive of two commissions.
+        risk_threshold = (
+            stop + (original["max_buy_risk_sek"] -
+                    2 * engine.cfg.minimum_commission_sek) / shares
+        )
+        opening = risk_threshold + 0.20
+        assert opening * shares < original["max_buy_notional_sek"]
+        assert opening > stop
+    else:
+        opening = stop - 1.0
+    cal = xcals.get_calendar("XSTO")
+    target = cal.next_session(days[-1])
+    at = cal.session_close(target).to_pydatetime() + timedelta(minutes=20)
+    work.feed.stage(PaperSession(
+        target.date(),at,"SYNTHETIC_TEST_ONLY",
+        "synthetic:next_open_risk_test",
+        (PaperBar("AAA",opening,opening+1.0,opening-1.0,opening+.15,20000),)
+    ),clock_utc=at+timedelta(minutes=1))
+    first=work.reconcile(clock_utc=at+timedelta(minutes=2))
+    assert first[0].status == expected
+    assert first[0].recorded_fill_price_sek is None
+    assert first[0].fee_sek is None
+    assert work.ledger.snapshot().last_sequence == 0
+    assert work.ledger.snapshot().cash_sek == 1000
+    assert work.reconcile(clock_utc=at+timedelta(minutes=3))[0].status == expected
+    # Rejected entries are terminal; they do not prevent the next
+    # source session from planning a new independent research intent.
+    new = work.plan(
+        symbol="AAA",side="BUY",quantity=1,
+        clock_utc=at+timedelta(minutes=4)
+    )
+    assert new != candidate.staged_decision_id
+    assert len(work._replay_intents()) == 2
+
+
+def test_commission_inclusive_risk_blocks_uneconomic_microposition(
+    tmp_path,source_fixture
+):
+    # Minimum 3 SEK entry + 3 SEK exit already exceeds the 5 SEK
+    # risk budget, even before an ATR price move.
+    cfg=SwingConfig(minimum_commission_sek=3.0)
+    engine,work,days,now=setup(tmp_path,source_fixture,cfg=cfg)
+    result=engine.preview(clock_utc=now)
+    assert result.status=="NO_SIGNAL"
+    assert result.side is None
+    assert engine.stage(clock_utc=now).staged_decision_id is None
+    assert not work.intents_path.exists()
+
+
+def test_envelope_is_backward_compatible_and_tamper_evident(
+    tmp_path,source_fixture
+):
+    from stockbot.swing.paper_rehearsal import SyntheticIntent
+    engine,work,days,now=setup(tmp_path,source_fixture)
+    engine.stage(clock_utc=now)
+    original=work._replay_intents()[0]["intent"]
+    obj=SyntheticIntent.from_dict(original)
+    assert obj.to_dict()==original
+    assert obj.max_buy_risk_sek is not None
+    text=work.intents_path.read_text()
+    work.intents_path.write_text(
+        text.replace('"reference_stop_sek":', '"reference_stop_sek":99.0,"unused":')
+    )
+    with pytest.raises(ValueError):
+        work._replay_intents()

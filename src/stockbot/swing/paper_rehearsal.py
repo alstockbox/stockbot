@@ -43,6 +43,11 @@ class SyntheticIntent:
     commission_pct: float = 0.005
     min_commission_sek: float = 3.0
     source_kind: str = "SYNTHETIC_TEST_ONLY"
+    # All-or-none optional synthetic BUY safety envelope. Old/manual
+    # intents omit these fields for backwards-compatible journal replay.
+    max_buy_notional_sek: float | None = None
+    max_buy_risk_sek: float | None = None
+    reference_stop_sek: float | None = None
 
     def __post_init__(self):
         if not isinstance(self.source_session, date) or isinstance(self.source_session, datetime):
@@ -64,6 +69,14 @@ class SyntheticIntent:
                 raise ValueError("invalid synthetic commission")
         if self.commission_pct > 0.2 or self.min_commission_sek > 1000:
             raise ValueError("unreasonable commission assumptions")
+        envelope = (self.max_buy_notional_sek,
+                    self.max_buy_risk_sek, self.reference_stop_sek)
+        if any(v is not None for v in envelope):
+            if self.side != "BUY" or any(
+                isinstance(v, bool) or not isinstance(v, (int, float))
+                or not isfinite(v) or v <= 0 for v in envelope
+            ):
+                raise ValueError("synthetic buy risk envelope must be complete and positive")
         if _utc(self.decided_at_utc) != self.decided_at_utc:
             raise ValueError("decision timestamp must be explicitly UTC")
         calendar = xcals.get_calendar("XSTO")
@@ -77,17 +90,24 @@ class SyntheticIntent:
             raise ValueError("decision created after target market opened")
 
     def to_dict(self):
-        return {
-            **asdict(self),
-            "source_session": self.source_session.isoformat(),
-            "target_session": self.target_session.isoformat(),
-            "decided_at_utc": self.decided_at_utc.isoformat(),
-        }
+        data = asdict(self)
+        data.update(
+            source_session=self.source_session.isoformat(),
+            target_session=self.target_session.isoformat(),
+            decided_at_utc=self.decided_at_utc.isoformat(),
+        )
+        for key in ("max_buy_notional_sek", "max_buy_risk_sek", "reference_stop_sek"):
+            if data[key] is None:
+                del data[key]  # byte-compatible with existing v1 journal records
+        return data
 
     @classmethod
     def from_dict(cls, raw):
         keys = set(cls.__dataclass_fields__)
-        required = keys - {"commission_pct", "min_commission_sek", "source_kind"}
+        required = keys - {
+            "commission_pct", "min_commission_sek", "source_kind",
+            "max_buy_notional_sek", "max_buy_risk_sek", "reference_stop_sek",
+        }
         if not isinstance(raw, dict) or not required.issubset(raw) or set(raw) - keys:
             raise ValueError("invalid synthetic intent schema")
         try:
@@ -193,10 +213,42 @@ class SyntheticPaperWorkflow:
                 return bar
         return None
 
+    @staticmethod
+    def _risk_rejection(intent: SyntheticIntent, opening_price: float) -> str | None:
+        """Check the original EOD risk envelope against the NEXT market open.
+
+        This is research protection, not a real guaranteed stop order.
+        It cannot prevent losses when the next session gaps past a stop.
+        """
+        if intent.max_buy_notional_sek is None:
+            return None  # legacy/manual research-only intent
+        # This synthetic entry is an OPEN-only conditional limit/rejection
+        # derived at EOD. If the market opens below the stop reference,
+        # there is no valid new long entry at that open.
+        if opening_price <= intent.reference_stop_sek:
+            return "REJECTED_NEXT_OPEN_BELOW_PLANNED_STOP"
+        notional = opening_price * intent.quantity
+        if notional > intent.max_buy_notional_sek + 1e-8:
+            return "REJECTED_NEXT_OPEN_POSITION_LIMIT"
+        fee_at_buy = max(intent.min_commission_sek,
+                         opening_price * intent.quantity * intent.commission_pct)
+        fee_at_reference_exit = max(intent.min_commission_sek,
+            intent.reference_stop_sek * intent.quantity * intent.commission_pct)
+        planned_risk_with_fees = (
+            intent.quantity*(opening_price-intent.reference_stop_sek)
+            + fee_at_buy + fee_at_reference_exit
+        )
+        if planned_risk_with_fees > intent.max_buy_risk_sek + 1e-8:
+            return "REJECTED_NEXT_OPEN_STOP_RISK"
+        return None
+
     def plan(self, *, symbol: str, side: Side, quantity: int, clock_utc: datetime,
              commission_pct: float = 0.005, min_commission_sek: float = 3.0,
              expected_source_entry_sha256: str | None = None,
-             expected_source_session: date | None = None):
+             expected_source_session: date | None = None,
+             max_buy_notional_sek: float | None = None,
+             max_buy_risk_sek: float | None = None,
+             reference_stop_sek: float | None = None):
         """Persist before next open. Never observes the next session's bar."""
         clock = _utc(clock_utc)
         self.intents_path.parent.mkdir(parents=True, exist_ok=True)
@@ -231,7 +283,10 @@ class SyntheticPaperWorkflow:
                         and existing.side == side
                         and existing.quantity == quantity
                         and existing.commission_pct == commission_pct
-                        and existing.min_commission_sek == min_commission_sek):
+                        and existing.min_commission_sek == min_commission_sek
+                        and existing.max_buy_notional_sek == max_buy_notional_sek
+                        and existing.max_buy_risk_sek == max_buy_risk_sek
+                        and existing.reference_stop_sek == reference_stop_sek):
                         return existing.decision_id
                     raise ValueError("CONFLICTING_DECISION_FOR_SESSION")
                 target = xcals.get_calendar("XSTO").next_session(
@@ -242,6 +297,9 @@ class SyntheticPaperWorkflow:
                     decided_at_utc=clock, source_entry_sha256=source["entry_hash"],
                     symbol=symbol, side=side, quantity=quantity,
                     commission_pct=commission_pct, min_commission_sek=min_commission_sek,
+                    max_buy_notional_sek=max_buy_notional_sek,
+                    max_buy_risk_sek=max_buy_risk_sek,
+                    reference_stop_sek=reference_stop_sek,
                 )
                 if intents and date.fromisoformat(intents[-1]["intent"]["source_session"]) >= source_day:
                     raise ValueError("OUT_OF_ORDER_DECISION_SESSION")
@@ -255,6 +313,12 @@ class SyntheticPaperWorkflow:
                 for row in intents:
                     pending = SyntheticIntent.from_dict(row["intent"])
                     if pending.target_session in feed and not self.ledger.has_decision(pending.decision_id):
+                        target_bar = self._find_bar(feed[pending.target_session], pending.symbol)
+                        # A rejected EOD-specified buy is terminal; never
+                        # write a fill and never block later paper sessions.
+                        if (target_bar is not None and target_bar["volume"] > 0
+                            and self._risk_rejection(pending, float(target_bar["open"]))):
+                            continue
                         raise ValueError("SETTLE_PREVIOUS_DECISION_FIRST")
                 seq = len(intents) + 1
                 prior = intents[-1]["entry_hash"] if intents else GENESIS
@@ -329,7 +393,12 @@ class SyntheticPaperWorkflow:
                             quantity=intent.quantity, price_sek=price, fee_sek=fee
                         )
                         previously = self.ledger.find_decision(intent.decision_id)
-                        if previously is not None:
+                        rejection = self._risk_rejection(intent, price)
+                        if rejection:
+                            if previously is not None:
+                                raise ValueError("RISK_REJECTED_BUT_LEDGER_HAS_FILL")
+                            status, price, fee = rejection, None, None
+                        elif previously is not None:
                             if previously != trade:
                                 raise ValueError("PAPER_FILL_CONFLICT_ON_RECOVERY")
                             status = "RECONSTRUCTED_PREVIOUSLY"

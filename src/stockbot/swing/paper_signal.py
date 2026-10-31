@@ -176,17 +176,23 @@ class SyntheticSwingSignal:
             budget = min(equity*self.cfg.max_position_weight,
                          equity*self.cfg.risk_per_trade/stop_distance*close)
             qty = min(floor(budget/close), forecast_cap)
+            reference_stop = close - stop_distance
             while qty > 0:
                 notional = qty*close
-                fee = max(self.cfg.minimum_commission_sek,
-                          self.cfg.commission_rate*notional)
-                if notional+fee <= balance.cash_sek + 1e-8:
+                buy_fee = max(self.cfg.minimum_commission_sek,
+                              self.cfg.commission_rate*notional)
+                exit_fee = max(self.cfg.minimum_commission_sek,
+                               self.cfg.commission_rate*qty*reference_stop)
+                planned_loss_with_fees = qty*stop_distance + buy_fee + exit_fee
+                if (notional+buy_fee <= balance.cash_sek + 1e-8
+                    and planned_loss_with_fees <=
+                        equity*self.cfg.risk_per_trade + 1e-8):
                     break
                 qty -= 1
             if qty < 1:
                 continue
             candidates.append((-float(close/sma50-1.0),symbol,qty,
-                               close,atr,qty*stop_distance,str(ind["entry"])))
+                               close,atr,planned_loss_with_fees,str(ind["entry"])))
         if not candidates:
             return result("NO_SIGNAL", "NO_LIQUID_RISK_BOUNDED_ENTRY")
         _,symbol,qty,close,atr,risk,reason = min(candidates)
@@ -205,6 +211,17 @@ class SyntheticSwingSignal:
             min_commission_sek=self.cfg.minimum_commission_sek,
             expected_source_entry_sha256=preview.source_entry_sha256,
             expected_source_session=date.fromisoformat(preview.source_session),
+            max_buy_notional_sek=(
+                preview.position_limit_sek if preview.side == "BUY" else None
+            ),
+            max_buy_risk_sek=(
+                round(preview.estimated_equity_sek * self.cfg.risk_per_trade, 6)
+                if preview.side == "BUY" else None
+            ),
+            reference_stop_sek=(
+                preview.last_close_sek - self.cfg.atr_stop_multiple * preview.atr_sek
+                if preview.side == "BUY" else None
+            ),
         )
         return SignalPreview(**{
             **preview.to_dict(), "staged_decision_id":decision,
